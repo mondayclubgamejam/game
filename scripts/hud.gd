@@ -10,9 +10,11 @@ const YELLOW := Color("ffcc1a")
 const RED := Color("ff3344")
 const GREY := Color("6d5f8f")
 
-const HINT := "ARROWS move / turn    A D strafe    SHIFT run    SPACE fire / recall    R restart"
-
 var font: Font
+var role := "A"         ## "A" forward shooter or "B" inverted recaller
+var hint := ""          ## controls line, bottom right
+var role_text := ""     ## e.g. "A  FORWARD", top right
+var role_color := ORANGE
 var state_text := "LOADED"
 var state_color := ORANGE
 var targets := 0
@@ -34,21 +36,14 @@ func _process(_delta: float) -> void:
 	queue_redraw()
 
 
+## Bullet state from this player's point of view. Matches bullet.gd's enum:
+## LOADED, FLYING_OUT, LODGED, FLYING_BACK.
 func set_state(state: int) -> void:
-	# Matches the enum order in player.gd: LOADED, FLYING_OUT, LODGED, FLYING_BACK
-	match state:
-		0:
-			state_text = "LOADED"
-			state_color = ORANGE
-		1:
-			state_text = "FIRING"
-			state_color = ORANGE
-		2:
-			state_text = "EMPTY"
-			state_color = GREY
-		3:
-			state_text = "RETURN"
-			state_color = BLUE
+	var a := {0: ["FIRE!", ORANGE], 1: ["FIRING", ORANGE], 2: ["WAIT", GREY], 3: ["INCOMING", BLUE]}
+	var b := {0: ["WAIT", GREY], 1: ["WAIT", GREY], 2: ["RECALL!", BLUE], 3: ["RETURN", BLUE]}
+	var entry: Array = (a if role == "A" else b)[state]
+	state_text = entry[0]
+	state_color = entry[1]
 
 
 func cutin(text: String, color: Color) -> void:
@@ -89,7 +84,7 @@ func _draw() -> void:
 	_poly([Vector2(0, 0), Vector2(30, -96), Vector2(330, -96), Vector2(300, 0)], OUTLINE)
 	_poly([Vector2(10, -8), Vector2(35, -88), Vector2(318, -88), Vector2(293, -8)], state_color)
 	_text("BULLET", Vector2(44, -64), 20, OUTLINE, 0)
-	_text(state_text, Vector2(40, -18), 54, Color.WHITE, 12)
+	_text(state_text, Vector2(40, -18), 54 if state_text.length() <= 7 else 44, Color.WHITE, 12)
 
 	# Targets left, top left.
 	draw_set_transform(Vector2(28 * s, 92 * s), 0.0, Vector2(s, s))
@@ -98,8 +93,13 @@ func _draw() -> void:
 	_text("TARGETS  %d" % targets, Vector2(36, -16), 40, Color.WHITE, 10)
 
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	draw_string(font, Vector2(0, h - 12 * s), HINT, HORIZONTAL_ALIGNMENT_RIGHT,
+	draw_string(font, Vector2(0, h - 12 * s), hint, HORIZONTAL_ALIGNMENT_RIGHT,
 		w - 20 * s, int(15 * s), Color(1, 1, 1, 0.75))
+	if role_text != "":
+		draw_string_outline(font, Vector2(0, 52 * s), role_text, HORIZONTAL_ALIGNMENT_RIGHT,
+			w - 24 * s, int(34 * s), int(9 * s), OUTLINE)
+		draw_string(font, Vector2(0, 52 * s), role_text, HORIZONTAL_ALIGNMENT_RIGHT,
+			w - 24 * s, int(34 * s), role_color)
 
 	if _busy:
 		_draw_banner(w, h, s)
@@ -114,7 +114,8 @@ func _draw_banner(w: float, h: float, s: float) -> void:
 	_poly([Vector2(-1100, 62), Vector2(1100, 40), Vector2(1100, 52), Vector2(-1100, 74)],
 		Color.WHITE, 0.0)
 	var fs := 120
-	while fs > 40 and font.get_string_size(_banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > 1100:
+	var max_w := w / s * 0.8  # fit the screen (split screen halves are narrow)
+	while fs > 30 and font.get_string_size(_banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > max_w:
 		fs -= 8
 	var tw := font.get_string_size(_banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	_text(_banner_text, Vector2(-tw / 2.0, fs * 0.36), fs, Color.WHITE, 22)

@@ -1,9 +1,12 @@
 extends Node
-## Plays a scripted run of Level 1 and saves screenshots, then quits.
+## Plays a scripted two-player run of Level 1 and saves screenshots, then quits.
 ## Usage: godot --path . -- --shots=game-style/screenshots
 
+const Enemy := preload("res://scripts/enemy.gd")
+
 var out_dir := ""
-var player: Node3D
+var players: Array = []  ## [A, B]
+var bullet: Node
 
 
 func _ready() -> void:
@@ -12,63 +15,66 @@ func _ready() -> void:
 
 
 func _run() -> void:
+	var a: Node3D = players[0]
+	var b: Node3D = players[1]
 	var enemies := get_tree().get_nodes_in_group("enemies")
-	enemies.sort_custom(func(a, b): return a.global_position.z < b.global_position.z)
-	var top: Node3D = enemies[0]
-	var bottom: Node3D = enemies[1]
+	enemies.sort_custom(func(x, y): return x.global_position.z < y.global_position.z)
+	var top: Node3D = enemies[0]     # forward (orange): the shot kills it
+	var bottom: Node3D = enemies[1]  # inverted (blue): the recall kills it
 
+	# Freeze enemies so the scripted shots line up.
+	Enemy.paused = true
 	await _wait(0.35)
 	await _shot("01_level_intro")
 
-	_face(top.global_position)
-	await _wait(1.2)
-	await _shot("02_aim_line")
+	# Close-up of both enemy types from A's view, aimed past them.
+	var a_pos := a.global_position
+	var a_rot := a.rotation
+	var close := top.global_position + Vector3(-3.6, 0, 0.9)
+	a.global_position = Vector3(close.x, 0.1, close.z)
+	_face(a, top.global_position + Vector3(0, 0, 1.1))
+	await _wait(1.3)
+	await _shot("00_enemy_closeup")
+	a.global_position = a_pos
+	a.rotation = a_rot
 
-	player._fire()
+	# A aims through the forward enemy and fires.
+	_face(a, top.global_position)
+	await _wait(0.8)
+	await _shot("02_aim_line")
+	bullet.try_fire()
 	await _wait(0.07)
 	await _shot("03_fire_flash")
-	await _wait(0.35)
+	await _wait(0.4)
 	await _shot("04_kill_banner")
-	await _wait(1.0)
+	await _wait(0.8)
 
-	# Stand where the bullet's way home passes through the second enemy.
-	var lodge: Vector3 = player.lodge_pos
+	# B stands where the wall -> B leg passes through the inverted enemy.
+	var lodge: Vector3 = bullet.lodge_pos
 	var through := bottom.global_position
 	var away := Vector3(through.x - lodge.x, 0, through.z - lodge.z)
 	var spot := Vector3(lodge.x, 0, lodge.z) + away * 1.6
-	player.global_position = Vector3(spot.x, 0.1, spot.z)
-	_face(lodge)
+	b.global_position = Vector3(spot.x, 0.1, spot.z)
+	_face(b, lodge)
+	_face(a, b.global_position)
 	await _wait(0.6)
-	await _shot("05_recall_line")
+	await _shot("05_recall_lines")
 
-	player._recall()
-	await _wait(0.06)
+	bullet.try_recall()
+	await _wait(0.08)
 	await _shot("06_recall_incoming")
-	await _wait(0.2)
-	await _shot("07_recall_yank")
+	while bullet.state != 0:  # wait until it is back in A's gun
+		await get_tree().physics_frame
+	await _wait(0.05)
+	await _shot("07_returned")
 	await _wait(1.2)
 	await _shot("08_clear_door")
-
 	get_tree().quit()
 
 
-func _overview() -> void:
-	var cam := Camera3D.new()
-	get_parent().add_child(cam)
-	cam.global_position = Vector3(14, 26, 30)
-	cam.look_at(Vector3(14, 0, 7), Vector3.UP)
-	cam.fov = 55
-	cam.current = true
-	var ui := get_parent().get_node_or_null("UI") as CanvasLayer
-	if ui:
-		ui.visible = false
-	await _wait(0.4)
-	await _shot("09_level_overview")
-
-
-func _face(target: Vector3) -> void:
-	var d := target - player.global_position
-	player.rotation.y = atan2(-d.x, -d.z)
+func _face(p: Node3D, target: Vector3) -> void:
+	var d := target - p.global_position
+	p.rotation.y = atan2(-d.x, -d.z)
 
 
 func _wait(seconds: float) -> void:

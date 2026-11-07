@@ -1,8 +1,9 @@
 extends RefCounted
 ## Builds a greybox level from an ASCII map (legend from PLAN.md).
 ##   #  wall          .  floor        A  player start
-##   E  enemy         S  shielded enemy (faces the nearest `d`)
-##   D  exit door     d  open doorway   G / B  treated as floor for now
+##   E  forward enemy (shot kills)   I  inverted enemy (recall kills)
+##   S  shielded enemy (faces the nearest `d`, stays put)
+##   B  player B start D  exit door    d  open doorway   G  treated as floor
 ##   P  neon pillar   C  stacked crates (both block bullets)
 
 const Enemy := preload("res://scripts/enemy.gd")
@@ -26,11 +27,11 @@ static func toon(color: Color) -> StandardMaterial3D:
 	return m
 
 
-## Returns { spawn: Vector3, enemies: Array, doors: Array, exit_z: float }.
+## Returns { spawn: Vector3, spawn_b: Vector3, enemies: Array, doors: Array, exit_z: float }.
 static func build(root: Node3D, map: Array) -> Dictionary:
 	var wall_mat := toon(WALL_COLOR)
 	var floor_mats := [Dressing.wet(FLOOR_A), Dressing.wet(FLOOR_B)]
-	var door_mat := toon(DOOR_COLOR)
+	var door_mat := Dressing.solid_mat(Color("5a5866"), 0.4, 0.6)
 
 	var rows := map.size()
 	var cols := 0
@@ -38,6 +39,7 @@ static func build(root: Node3D, map: Array) -> Dictionary:
 		cols = maxi(cols, String(line).length())
 
 	var spawn := Vector3.ZERO
+	var spawn_b := Vector3.ZERO
 	var enemy_specs := []
 	var doorways := []
 	var doors := []
@@ -56,8 +58,10 @@ static func build(root: Node3D, map: Array) -> Dictionary:
 			match ch:
 				"A":
 					spawn = p
-				"E", "S":
-					enemy_specs.append({"pos": p, "shielded": ch == "S"})
+				"B":
+					spawn_b = p
+				"E", "S", "I":
+					enemy_specs.append({"pos": p, "shielded": ch == "S", "inverted": ch == "I"})
 				"d":
 					doorways.append(p)
 				"D":
@@ -94,16 +98,20 @@ static func build(root: Node3D, map: Array) -> Dictionary:
 	for spec in enemy_specs:
 		var e := Enemy.new()
 		e.shielded = spec["shielded"]
+		e.inverted = spec["inverted"]
 		root.add_child(e)
 		e.global_position = spec["pos"]
 		var look_target: Vector3 = spawn
 		if e.shielded and not doorways.is_empty():
 			look_target = _nearest(spec["pos"], doorways)
+		if e.inverted:
+			look_target = e.global_position * 2.0 - look_target  # back to the player
 		e.face(look_target)
 		enemies.append(e)
 
 	return {
 		"spawn": spawn,
+		"spawn_b": spawn_b,
 		"enemies": enemies,
 		"doors": doors,
 		"exit_z": (rows - 1) * TILE + TILE * 0.6,

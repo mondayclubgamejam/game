@@ -1,10 +1,13 @@
 extends Node3D
 ## Builds the whole MVP in code: input map, environment, comic post-process,
-## level, player, 3D hand-and-gun viewmodel and HUD. Handles door, restart and next level.
+## level, two split-screen players with 3D hand-and-gun viewmodels and HUDs,
+## and the one shared bullet. Handles door, restart and next level.
 
 const LevelBuilder := preload("res://scripts/level_builder.gd")
 const Player := preload("res://scripts/player.gd")
+const Enemy := preload("res://scripts/enemy.gd")
 const Viewmodel := preload("res://scripts/viewmodel.gd")
+const Bullet := preload("res://scripts/bullet.gd")
 const Hud := preload("res://scripts/hud.gd")
 const PostShader := preload("res://shaders/comic_post.gdshader")
 const ScreenshotDirector := preload("res://scripts/screenshot_director.gd")
@@ -19,7 +22,7 @@ const LEVELS := [
 			"#..A.G.....P..#",
 			"#.........E...#",
 			"#......P......#",
-			"#CC.......E...#",
+			"#CC.B.....I...#",
 			"#C..........P.#",
 			"#######D#######",
 		],
@@ -30,12 +33,12 @@ const LEVELS := [
 		"map": [
 			"###############",
 			"#.............#",
-			"#..E.......E..#",
+			"#..E.......I..#",
 			"#.............#",
 			"#.....###.....#",
 			"#.A.G.###...B.#",
 			"#.............#",
-			"#..E.......E..#",
+			"#..I.......E..#",
 			"#######D#######",
 		],
 	},
@@ -60,14 +63,26 @@ const KILL_WORDS := ["", "DOWN!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Survives scene reloads, so restart keeps the level and the exit advances it.
 static var level_index := 0
 
-var player: Player
-var hand: Viewmodel
-var hud: Hud
+const A_ACCENT := Color(1.0, 0.48, 0.1)
+const B_ACCENT := Color(0.18, 0.66, 1.0)
+const ALL_LAYERS := 0xFFFFF
+# Render layers (bit values): own body hidden from own camera, own hand only
+# visible to own camera.
+const A_BODY := 2
+const B_BODY := 4
+const A_HAND := 8
+const B_HAND := 16
+
+var players: Array = []  ## [A, B]
+var hands: Array = []
+var huds: Array = []
+var bullet: Bullet
 var _doors: Array = []
 var _exit_z := 0.0
 var _enemies_left := 0
 var _cleared := false
 var _leaving := false
+var _caught := false
 
 
 func _ready() -> void:
@@ -80,38 +95,97 @@ func _ready() -> void:
 	_doors = built["doors"]
 	_exit_z = built["exit_z"]
 	_enemies_left = built["enemies"].size()
+	Enemy.paused = false
 	for e in built["enemies"]:
 		e.died.connect(_on_enemy_died)
+		e.reached_player.connect(_on_caught)
 
-	player = Player.new()
-	add_child(player)
-	player.global_position = built["spawn"] + Vector3(0, 0.1, 0)
-	player.rotation.y = deg_to_rad(level["facing"])
+	bullet = Bullet.new()
+	add_child(bullet)
 
-	var ui := CanvasLayer.new()
-	ui.name = "UI"
-	add_child(ui)
-	hand = Viewmodel.new()
-	hand.player = player
-	player.camera.add_child(hand)
-	player.muzzle_node = hand.muzzle
-	hud = Hud.new()
-	ui.add_child(hud)
-	hud.targets = _enemies_left
+	# Split screen: A on the left, B on the right, both looking into one world.
+	var screens := HBoxContainer.new()
+	screens.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	screens.add_theme_constant_override("separation", 4)
+	var screen_layer := CanvasLayer.new()
+	add_child(screen_layer)
+	screen_layer.add_child(screens)
 
-	player.state_changed.connect(hud.set_state)
-	player.fired.connect(hand.play_fire)
-	player.recalled.connect(hand.play_recall)
-	player.recall_blocked.connect(_on_recall_blocked)
-	player.shot_finished.connect(_on_shot_finished)
+	for i in 2:
+		var is_a := i == 0
+		var container := SubViewportContainer.new()
+		container.stretch = true
+		container.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		container.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		screens.add_child(container)
+		var vp := SubViewport.new()
+		container.add_child(vp)
+		var cam := Camera3D.new()
+		cam.fov = 75.0
+		cam.near = 0.05
+		cam.cull_mask = ALL_LAYERS & ~((A_BODY | B_HAND) if is_a else (B_BODY | A_HAND))
+		vp.add_child(cam)
+		cam.current = true
 
-	hud.cutin("%d  %s" % [level_index + 1, level["name"]], LevelBuilder.DOOR_COLOR)
+		var p := Player.new()
+		p.role = "A" if is_a else "B"
+		p.actions = "p1_" if is_a else "p2_"
+		p.gun = bullet
+		p.camera = cam
+		p.body_layer = A_BODY if is_a else B_BODY
+		p.accent = A_ACCENT if is_a else B_ACCENT
+		add_child(p)
+		var spawn: Vector3 = built["spawn"] if is_a else built["spawn_b"]
+		p.global_position = spawn + Vector3(0, 0.1, 0)
+		p.rotation.y = deg_to_rad(level["facing"])
+
+		var vm := Viewmodel.new()
+		vm.player = p
+		vm.accent = p.accent
+		vm.layer_mask = A_HAND if is_a else B_HAND
+		cam.add_child(vm)
+		p.muzzle_node = vm.muzzle
+
+		var ui := CanvasLayer.new()
+		vp.add_child(ui)
+		var hud := Hud.new()
+		hud.role = p.role
+		hud.role_color = p.accent
+		hud.role_text = "A  FORWARD" if is_a else "B  INVERTED"
+		hud.hint = "W S move   A D turn   SPACE fire   R restart" if is_a \
+			else "UP DOWN move   LEFT RIGHT turn   ENTER recall"
+		ui.add_child(hud)
+		hud.targets = _enemies_left
+		hud.set_state(Bullet.LOADED)
+
+		players.append(p)
+		hands.append(vm)
+		huds.append(hud)
+
+	bullet.shooter = players[0]
+	bullet.recaller = players[1]
+	for hud in huds:
+		bullet.state_changed.connect(hud.set_state)
+	bullet.fired.connect(func():
+		hands[0].play_fire()
+		players[0].shake(1.0))
+	bullet.relayed.connect(func():
+		hands[1].play_recall()
+		players[1].shake(0.6))
+	bullet.returned.connect(func():
+		hands[0].play_recall()
+		players[0].shake(0.7))
+	bullet.recall_blocked.connect(_on_recall_blocked)
+	bullet.shot_finished.connect(_on_shot_finished)
+
+	_cutin_all("%d  %s" % [level_index + 1, level["name"]], LevelBuilder.DOOR_COLOR)
 
 	for arg in OS.get_cmdline_user_args():
 		if arg.begins_with("--shots="):
 			var director := ScreenshotDirector.new()
 			director.out_dir = ProjectSettings.globalize_path("res://").path_join(arg.trim_prefix("--shots="))
-			director.player = player
+			director.players = players
+			director.bullet = bullet
 			add_child(director)
 
 
@@ -119,15 +193,22 @@ func _process(_delta: float) -> void:
 	if Input.is_action_just_pressed("restart"):
 		get_tree().reload_current_scene()
 		return
-	if _cleared and not _leaving and player.global_position.z > _exit_z:
+	# Both players have to walk out through the open door.
+	if _cleared and not _leaving and players.all(func(p): return p.global_position.z > _exit_z):
 		_leaving = true
 		level_index = (level_index + 1) % LEVELS.size()
 		get_tree().reload_current_scene()
 
 
+func _cutin_all(text: String, color: Color) -> void:
+	for hud in huds:
+		hud.cutin(text, color)
+
+
 func _on_enemy_died() -> void:
 	_enemies_left -= 1
-	hud.targets = _enemies_left
+	for hud in huds:
+		hud.targets = _enemies_left
 	if _enemies_left <= 0 and not _cleared:
 		_cleared = true
 		# Let the kill banner show first.
@@ -135,7 +216,7 @@ func _on_enemy_died() -> void:
 
 
 func _open_doors() -> void:
-	hud.cutin("CLEAR!", Hud.MAGENTA)
+	_cutin_all("CLEAR!", Hud.MAGENTA)
 	for door in _doors:
 		var tw := create_tween()
 		tw.tween_property(door, "position:y", door.position.y + LevelBuilder.WALL_H + 0.1, 0.8) \
@@ -146,23 +227,35 @@ func _on_shot_finished(kills: int, was_recall: bool) -> void:
 	if kills <= 0:
 		return
 	var word: String = KILL_WORDS[mini(kills, KILL_WORDS.size() - 1)]
-	hud.cutin(word, Hud.BLUE if was_recall else Hud.ORANGE)
+	_cutin_all(word, Hud.BLUE if was_recall else Hud.ORANGE)
+
+
+func _on_caught() -> void:
+	if _caught or _cleared:
+		return
+	_caught = true
+	Enemy.paused = true
+	_cutin_all("CAUGHT!", Hud.RED)
+	get_tree().create_timer(1.2).timeout.connect(get_tree().reload_current_scene)
 
 
 func _on_recall_blocked() -> void:
-	hand.play_blocked()
-	hud.cutin("BLOCKED!", Hud.RED)
+	hands[1].play_blocked()
+	_cutin_all("BLOCKED!", Hud.RED)
 
 
 func _setup_input() -> void:
-	_add_action("move_forward", [KEY_UP])
-	_add_action("move_back", [KEY_DOWN])
-	_add_action("turn_left", [KEY_LEFT])
-	_add_action("turn_right", [KEY_RIGHT])
-	_add_action("strafe_left", [KEY_A])
-	_add_action("strafe_right", [KEY_D])
-	_add_action("run", [KEY_SHIFT])
-	_add_action("fire", [KEY_SPACE])
+	# Player A: WASD + Space. Player B: arrows + Enter.
+	_add_action("p1_forward", [KEY_W])
+	_add_action("p1_back", [KEY_S])
+	_add_action("p1_left", [KEY_A])
+	_add_action("p1_right", [KEY_D])
+	_add_action("p1_act", [KEY_SPACE])
+	_add_action("p2_forward", [KEY_UP])
+	_add_action("p2_back", [KEY_DOWN])
+	_add_action("p2_left", [KEY_LEFT])
+	_add_action("p2_right", [KEY_RIGHT])
+	_add_action("p2_act", [KEY_ENTER, KEY_KP_ENTER])
 	_add_action("restart", [KEY_R])
 
 

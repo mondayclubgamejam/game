@@ -11,6 +11,8 @@ const BASE_POS := Vector3(0.12, -0.115, -0.27)
 const BASE_ROT := Vector3(0.0, 1.623, 0.0)  # ~93 deg: gun local +X -> forward, toed in
 
 var player: Node  ## reads `move_amount` for walk bob
+var accent := FIRE_COLOR  ## sight dot, slide line and cuff glow
+var layer_mask := 1       ## render layer, so only this player's camera sees it
 var muzzle: Node3D
 
 var kick := 0.0          ## +1 fire recoil, -1 recall yank
@@ -43,6 +45,14 @@ func _ready() -> void:
 	fill.omni_range = 1.0
 	fill.position = Vector3(0.25, 0.15, 0.05)
 	add_child(fill)
+	_set_layers(self)
+
+
+func _set_layers(node: Node) -> void:
+	for child in node.get_children():
+		if child is VisualInstance3D:
+			child.layers = layer_mask
+		_set_layers(child)
 
 
 func _process(delta: float) -> void:
@@ -120,9 +130,9 @@ func _build_gun() -> void:
 	# Sights with glowing dots.
 	_box(_slide, Vector3(0.168, 0.0365, 0), Vector3(0.008, 0.007, 0.005), dark)
 	_box(_slide, Vector3(0.004, 0.0365, 0), Vector3(0.008, 0.007, 0.018), dark)
-	_box(_slide, Vector3(0.168, 0.037, 0), Vector3(0.0025, 0.0025, 0.0055), _glow(FIRE_COLOR))
+	_box(_slide, Vector3(0.168, 0.037, 0), Vector3(0.0025, 0.0025, 0.0055), _glow(accent))
 	# Neon accent line on the visible (right) side.
-	_box(_slide, Vector3(0.10, 0.011, 0.0132), Vector3(0.11, 0.0025, 0.001), _glow(FIRE_COLOR))
+	_box(_slide, Vector3(0.10, 0.011, 0.0132), Vector3(0.11, 0.0025, 0.001), _glow(accent))
 	# Barrel crown and muzzle.
 	_cylinder_x(_slide, Vector3(0.183, 0.017, 0), 0.0068, 0.008, steel)
 	_cylinder_x(_slide, Vector3(0.1875, 0.017, 0), 0.0042, 0.002, dark)
@@ -216,7 +226,7 @@ func _build_hand() -> void:
 	torus.inner_radius = 0.041
 	torus.outer_radius = 0.047
 	ring.mesh = torus
-	ring.material_override = _glow(Color("19ffc8"))
+	ring.material_override = _glow(accent)
 	hand.add_child(ring)
 	ring.position = cuff
 	ring.quaternion = Quaternion(Vector3.UP, (elbow - wrist).normalized())
