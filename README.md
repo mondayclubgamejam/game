@@ -7,7 +7,7 @@ A two-player online co-op shooter about time direction. Two players share **one 
 - The **normal** player can only **fire**. The bullet passes through every enemy in its path and sticks in the first wall.
 - The **inverted** player can only **recall**. The bullet rips out of wherever it stuck and curves back into their gun, killing everything on the way. A recall can't pass through walls: it sticks in any wall in the way, and the inverted player has to find a clear angle.
 
-Players pick who's normal and who's inverted in the match lobby.
+The host picks who's normal and who's inverted in the match lobby.
 
 So you must **throw the gun to each other** after every shot and every recall. Carrying the gun slows you down. Friendly fire is on, enemies die in one hit and so do you, and if either player dies the room restarts. Clear every enemy to get a new procedurally generated room.
 
@@ -46,7 +46,7 @@ The aim line shows where the shot or recall will go: orange for a shot, blue for
 
 ### How it plays
 
-- **Optional: time slows down while both players stand still** (turn it on in the match lobby), and runs at normal speed as soon as either of you moves. Enemies, bullets, enemy shots and thrown guns all crawl, and the screen drains to a cool grey while it lasts. Use it to plan a shot, line up a recall, or watch an enemy bullet coming.
+- **Optional: time slows down while both players stand still** (the host turns it on in the match lobby), and runs at normal speed as soon as either of you moves. Enemies, bullets, enemy shots and thrown guns all crawl, and the screen drains to a cool grey while it lasts. Use it to plan a shot, line up a recall, or watch an enemy bullet coming.
 - **Enemies come in three kinds**, told apart by silhouette and colour (weapon and belt): **gunmen** (red, pistol; shoot from range, then take a while to reload), **swordsmen** (steel, long sword) and **brawlers** (lime, big fists). An enemy flashes white while it winds up an attack.
 - **Crates** are waist-high cover: crouch behind them, jump on them, and note that bullets stick in them like walls.
 - The **ATTEMPT** counter under TARGETS counts your tries at the current room; it resets when you clear it.
@@ -57,7 +57,7 @@ Put the server's **IP address** in **SERVER** and click **PLAY ONLINE**. Both pl
 
 ### The match lobby
 
-Once two players are connected (on the LAN or online) they meet in the **match lobby**: each sees the other's name, **picks a role** (picking your partner's role swaps you) and clicks **I'M READY**. The room starts when both are ready.
+Once two players are connected (on the LAN or online) they meet in the **match lobby** and see each other's names. **The host picks the roles** (choosing their own role gives the partner the other) **and whether time slows** while both stand still; the partner sees those choices greyed out. Both click **I'M READY** and the room starts. On the LAN the host is whoever clicked HOST A GAME; online, it's whoever joined the server first.
 
 In game, **Esc → CHANGE ROLES** takes both players back to the match lobby. You return to **the same room**, and the attempt count doesn't go up for the trip (a death that just happened still counts). **LEAVE MATCH** goes back to the title screen; if you were hosting on the LAN, your game stays open for a new partner.
 

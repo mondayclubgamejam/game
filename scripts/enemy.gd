@@ -18,7 +18,7 @@ const GUN_RANGE := 18.0
 const SPAWN_GRACE := 2.2       ## no attacks right after a (re)start
 const REACTION := 0.45         ## pause after first spotting someone
 
-const SPEEDS := [3.0, 5.0, 4.3]          ## by kind: gunman, sword, fists
+const SPEEDS := [2.4, 4.0, 3.45]         ## by kind: gunman, sword, fists (m/s)
 const WINDUPS := [0.7, 0.3, 0.4]
 const COOLDOWNS := [3.8, 0.8, 0.7]       ## gunmen reload slowly
 const COOLDOWN_JITTER := [1.4, 0.4, 0.4]

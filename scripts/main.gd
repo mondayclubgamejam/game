@@ -56,7 +56,7 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Network protocol version. Bump it whenever an RPC's arguments change, so
 ## mismatched builds refuse each other with a clear message instead of
 ## failing on individual RPCs.
-const PROTOCOL := 6
+const PROTOCOL := 7
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
 const SERVER_NAME := "one-gun-one-bullet"       ## the name inside that certificate
@@ -529,7 +529,7 @@ func _party_broadcast(note: String) -> void:
 	var info := "NEW GAME"
 	if _party_resume:
 		info = "ROOM %d  ·  ATTEMPT %d  ·  SAME MAP" % [room_no, _resume_attempt()]
-	party_state.rpc(members, info, note, _slowmo_enabled)
+	party_state.rpc(members, info, note, _slowmo_enabled, _party_leader())
 
 
 ## Host -> a new client: which protocol the host speaks.
@@ -568,11 +568,17 @@ func party_hello(player_name: String, client_protocol: int) -> void:
 		_party_broadcast("")
 
 
-## Pick a role; if the partner has it, the two of you swap. Ready resets.
+## The match lobby's host: the LAN player who hosted, or online the player
+## who joined the server first. Only they pick roles and options.
+func _party_leader() -> int:
+	return _party_order[0] if not _party_order.is_empty() else 0
+
+
+## The host picks their own role; the partner gets the other one. Ready resets.
 @rpc("any_peer", "call_remote", "reliable")
 func party_pick(role: int) -> void:
 	var id := _sender()
-	if not multiplayer.is_server() or not _party.has(id) or phase != Phase.LOBBY or role < 0 or role > 1:
+	if not multiplayer.is_server() or id != _party_leader() or phase != Phase.LOBBY or role < 0 or role > 1:
 		return
 	for other in _party:
 		if other != id and _party[other]["role"] == role:
@@ -598,16 +604,16 @@ func party_ready(ready: bool) -> void:
 		_party_broadcast("")
 
 
-## Either player: turn "time slows while both stand still" on or off.
+## The host turns "time slows while both stand still" on or off.
 @rpc("any_peer", "call_remote", "reliable")
 func party_set_slowmo(on: bool) -> void:
 	var id := _sender()
-	if not multiplayer.is_server() or not _party.has(id) or phase != Phase.LOBBY:
+	if not multiplayer.is_server() or id != _party_leader() or phase != Phase.LOBBY:
 		return
 	_slowmo_enabled = on
 	for m in _party.values():
 		m["ready"] = false
-	_party_broadcast("%s turned time slowing %s." % [_party[id]["name"], "on" if on else "off"])
+	_party_broadcast("The host turned time slowing %s." % ("on" if on else "off"))
 
 
 ## Either player, in game: everyone back to the match lobby, same room.
@@ -652,7 +658,7 @@ func _party_start() -> void:
 
 ## Host -> everyone: the match lobby as it stands. Leaves any running round.
 @rpc("authority", "call_local", "reliable")
-func party_state(members: Array, info: String, note: String, slowmo: bool) -> void:
+func party_state(members: Array, info: String, note: String, slowmo: bool, leader: int) -> void:
 	if _dedicated:
 		return
 	if phase != Phase.LOBBY:
@@ -666,13 +672,13 @@ func party_state(members: Array, info: String, note: String, slowmo: bool) -> vo
 	var list := []
 	for m in members:
 		list.append({"id": m[0], "name": m[1], "role": m[2], "ready": m[3]})
-	lobby.show_party(list, multiplayer.get_unique_id(), info, slowmo, note)
+	lobby.show_party(list, multiplayer.get_unique_id(), leader, info, slowmo, note)
 	_log_event("match lobby: %s" % [members])
 	# The test bot readies up as soon as there's a partner.
 	if _bot_mode and members.size() == 2:
 		for m in list:
 			if m["id"] == multiplayer.get_unique_id() and not m["ready"]:
-				if _bot_swap_pending:
+				if _bot_swap_pending and leader == multiplayer.get_unique_id():
 					_bot_swap_pending = false
 					var other_role: int = 1 - m["role"]
 					get_tree().create_timer(0.2).timeout.connect(func(): _to_host("party_pick", [other_role]))

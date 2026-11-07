@@ -41,6 +41,8 @@ var _wait_hint: Label
 var _party_info: Label
 var _slots: Array[PanelContainer] = []
 var _role_buttons: Array[Button] = []
+var _roles_heading: Label
+var _leader := 0
 var _ready_button: Button
 var _my_ready := false
 var _slowmo_button: Button
@@ -116,7 +118,11 @@ func show_busy(text: String, note := "") -> void:
 
 ## The match lobby. `members`: [{id, name, role (0 forward / 1 reverse), ready}].
 ## `info` says whether this is a new game or a return to the same room.
-func show_party(members: Array, my_id: int, info: String, slowmo: bool, note := "") -> void:
+## Only the host (`leader`) can change roles and options; the partner sees
+## them greyed out.
+func show_party(members: Array, my_id: int, leader: int, info: String, slowmo: bool, note := "") -> void:
+	_leader = leader
+	var can_edit := my_id == leader
 	if not _party.visible:
 		_show_page(_party)
 	_party_info.text = info
@@ -134,12 +140,20 @@ func show_party(members: Array, my_id: int, info: String, slowmo: bool, note := 
 	var my_role: int = mine.get("role", 0)
 	for r in 2:
 		var picked := r == my_role
-		_role_buttons[r].add_theme_stylebox_override("normal", _slanted(Palette.role_color(r) if picked
-			else Palette.role_color(r).darkened(0.55), 6 if picked else 4, Color.WHITE if picked else Palette.INK))
+		var style := _slanted(Palette.role_color(r) if picked else Palette.role_color(r).darkened(0.55),
+			6 if picked else 4, Color.WHITE if picked else Palette.INK)
+		_role_buttons[r].add_theme_stylebox_override("normal", style)
+		_role_buttons[r].add_theme_stylebox_override("disabled", style)
+		_role_buttons[r].disabled = not can_edit
+	_roles_heading.text = "PICK YOUR ROLE  ·  YOUR PARTNER GETS THE OTHER" if can_edit \
+		else "THE HOST PICKS ROLES AND OPTIONS"
 	_slowmo_on = slowmo
 	_slowmo_button.text = "TIME SLOWS WHEN YOU BOTH STAND STILL:  " + ("ON" if slowmo else "OFF")
-	_slowmo_button.add_theme_stylebox_override("normal", _slanted(Palette.MUTED.lightened(0.25) if slowmo
-		else Palette.MUTED.darkened(0.45), 6 if slowmo else 4, Color.WHITE if slowmo else Palette.INK))
+	var slow_style := _slanted(Palette.MUTED.lightened(0.25) if slowmo
+		else Palette.MUTED.darkened(0.45), 6 if slowmo else 4, Color.WHITE if slowmo else Palette.INK)
+	_slowmo_button.add_theme_stylebox_override("normal", slow_style)
+	_slowmo_button.add_theme_stylebox_override("disabled", slow_style)
+	_slowmo_button.disabled = not can_edit
 	_my_ready = mine.get("ready", false)
 	var full := members.size() >= 2
 	_ready_button.disabled = not full
@@ -335,7 +349,8 @@ func _build_party() -> void:
 		_party.add_child(slot)
 		_slots.append(slot)
 
-	_party.add_child(_heading("PICK YOUR ROLE", Palette.MUTED.lightened(0.5)))
+	_roles_heading = _heading("PICK YOUR ROLE", Palette.MUTED.lightened(0.5))
+	_party.add_child(_roles_heading)
 	var roles := HBoxContainer.new()
 	roles.add_theme_constant_override("separation", 12)
 	_party.add_child(roles)
@@ -380,7 +395,7 @@ func _fill_slot(slot: PanelContainer, m: Dictionary, is_me: bool) -> void:
 		return
 	var role: int = m["role"]
 	slot.add_theme_stylebox_override("panel", _slanted(Palette.role_color(role), 4))
-	name_label.text = str(m["name"]) + ("  (YOU)" if is_me else "")
+	name_label.text = str(m["name"]) + ("  (YOU)" if is_me else "") + ("  (HOST)" if m["id"] == _leader else "")
 	var role_text := "NORMAL · FIRES THE BULLET" if role == 0 else "INVERTED · RECALLS THE BULLET"
 	info.text = role_text + ("    ·  READY" if m["ready"] else "    ·  NOT READY")
 
