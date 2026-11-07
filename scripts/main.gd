@@ -1089,6 +1089,8 @@ func player_down(peer: int, cause: String) -> void:
 	p.kill()
 	var me := peer == multiplayer.get_unique_id()
 	hud.banner("YOU DIED" if me else "%s DOWN" % p.player_name, Palette.DANGER)
+	if me:
+		hud.went_down()
 	_log_event("player %d down (%s)" % [peer, cause])
 	if gun != null and gun.state == Gun.HELD and gun.holder == p:
 		gun.drop_at(p.global_position)
@@ -1409,6 +1411,7 @@ func _on_bullet_enemy_hit(enemy: Node3D, dir: Vector3) -> void:
 	if not bullet.authority or not enemy.alive:
 		return
 	_action_kills += 1
+	hud.hit()
 	if multiplayer.is_server():
 		_kill_enemy(enemy.id, dir)
 	else:
@@ -1717,6 +1720,7 @@ func _process(_delta: float) -> void:
 	if phase == Phase.LOBBY or local_player == null:
 		return
 	_update_tutorial_hud()
+	_update_hud_state()
 	hud.targets = _enemies_left
 	hud.can_act = can_fire() or can_recall()
 	hud.ping_ms = int(rtt * 1000.0) if rtt > 0.0 else -1
@@ -1724,6 +1728,100 @@ func _process(_delta: float) -> void:
 		_spectate_next()  # the teammate we watched went down too
 	_update_markers()
 	hud.slowmo = inverse_lerp(1.0, Clock.SLOW, Clock.scale)
+
+
+# --- HUD ------------------------------------------------------------------------------------
+
+## Everything the HUD shows that comes from the game state.
+func _update_hud_state() -> void:
+	var kinds := [0, 0, 0]
+	for e in enemies:
+		if e.alive:
+			kinds[e.kind] += 1
+	hud.kinds_left = kinds
+	var team := []
+	for p in teammates():
+		team.append([p.player_name, p.role, p.alive, gun != null and gun.state == Gun.HELD and gun.holder == p])
+	hud.team = team
+	hud.move = clampf(local_player.move_amount, 0.0, 1.5) if local_player.alive else 0.0
+	_update_gun_card()
+	_update_prompt()
+	_update_threats()
+
+
+func _update_gun_card() -> void:
+	if gun == null or bullet == null:
+		hud.gun_line = ""
+		return
+	hud.gun_loaded = gun.loaded
+	match gun.state:
+		Gun.HELD:
+			if gun.holder == local_player:
+				hud.gun_line = "YOU HAVE THE GUN"
+				hud.gun_line_col = Palette.role_color(local_player.role)
+			else:
+				hud.gun_line = "%s HAS THE GUN" % gun.holder.player_name
+				hud.gun_line_col = Palette.role_color(gun.holder.role)
+		Gun.FLYING:
+			hud.gun_line = "GUN IN THE AIR"
+			hud.gun_line_col = Palette.SIGNAL
+		_:
+			hud.gun_line = "GUN ON THE FLOOR"
+			hud.gun_line_col = Palette.SIGNAL
+	match bullet.state:
+		Bullet.IN_GUN:
+			hud.bullet_line = "LOADED: NORMAL FIRES IT"
+			hud.bullet_line_col = Palette.FORWARD
+		Bullet.FORWARD:
+			hud.bullet_line = "BULLET FIRED"
+			hud.bullet_line_col = Palette.FORWARD
+		Bullet.LODGED:
+			var d := local_player.global_position.distance_to(bullet.lodge_pos)
+			hud.bullet_line = "BULLET IN THE WALL  ·  %d M" % roundi(d)
+			hud.bullet_line_col = Palette.REVERSE
+		Bullet.RECALL:
+			hud.bullet_line = "BULLET COMING BACK"
+			hud.bullet_line_col = Palette.REVERSE
+		_:
+			hud.bullet_line = ""
+
+
+## The key to press right now, under the crosshair.
+func _update_prompt() -> void:
+	hud.prompt_key = ""
+	hud.prompt_text = ""
+	if phase != Phase.PLAYING or not local_player.alive or gun == null:
+		return
+	if can_fire():
+		hud.prompt_key = "LMB"
+		hud.prompt_text = "FIRE"
+	elif can_recall():
+		hud.prompt_key = "LMB"
+		hud.prompt_text = "RECALL"
+	elif i_hold_gun() and bullet.state != Bullet.FORWARD and bullet.state != Bullet.RECALL and not teammates().is_empty():
+		hud.prompt_key = "RMB"
+		hud.prompt_text = "THROW TO A TEAMMATE"
+
+
+## Enemies winding up an attack on us: which way they are, and how close the
+## attack is to landing.
+func _update_threats() -> void:
+	hud.threats.clear()
+	if not local_player.alive:
+		return
+	var cam := local_player.camera
+	for e in enemies:
+		if not e.alive or e._flash <= 0.0:
+			continue
+		var on_me: bool = e._aim_target == local_player
+		if e.kind != RoomGen.Kind.GUNMAN:
+			on_me = e.global_position.distance_to(local_player.global_position) < 4.0
+		if not on_me:
+			continue
+		var rel: Vector3 = cam.global_transform.basis.inverse() * (e.global_position - cam.global_position)
+		var ang: float = atan2(rel.x, -rel.z)
+		var total: float = Enemy.WINDUPS[e.kind] / e.pace
+		hud.threats.append([ang, clampf(1.0 - e._flash / maxf(total, 0.01), 0.0, 1.0)])
 
 
 # --- Tutorials ----------------------------------------------------------------------------
