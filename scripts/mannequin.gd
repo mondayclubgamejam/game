@@ -58,11 +58,45 @@ func walk(speed: float, delta: float) -> void:
 ## Turns a bone from its rest pose about the body's side-to-side axis.
 ## Positive swings a hanging limb forward; PI / 2 points an arm straight ahead.
 func bend(bone_name: String, angle: float) -> void:
-	if not _bones.has(bone_name):
-		_bones[bone_name] = skeleton.find_bone(bone_name)
-	var bone: int = _bones[bone_name]
+	pose(bone_name, Vector3(angle, 0.0, 0.0))
+
+
+## Turns a bone from its rest pose by `euler` (pitch, yaw, roll in radians),
+## measured in the body's axes about the bone's own pivot and relative to its
+## parent. x > 0 swings a hanging limb forward, y > 0 turns it toward the
+## body's left, z > 0 swings it toward the body's right (+X).
+func pose(bone_name: String, euler: Vector3) -> void:
+	var bone := _bone(bone_name)
 	if bone < 0:
 		return
 	var rest := skeleton.get_bone_rest(bone).basis.get_rotation_quaternion()
 	var g := skeleton.get_bone_global_rest(bone).basis.get_rotation_quaternion()
-	skeleton.set_bone_pose_rotation(bone, rest * (g.inverse() * Quaternion(Vector3.RIGHT, angle) * g))
+	skeleton.set_bone_pose_rotation(bone, rest * (g.inverse() * Quaternion.from_euler(euler) * g))
+
+
+## Moves a bone from its rest position (the hips: the whole body).
+func shift(bone_name: String, offset: Vector3) -> void:
+	var bone := _bone(bone_name)
+	if bone >= 0:
+		skeleton.set_bone_pose_position(bone, skeleton.get_bone_rest(bone).origin + offset)
+
+
+## Something that follows a bone (a weapon in the hand, a visor on the head).
+## `body_xform` is where it sits, in the body's space, with the figure at rest.
+func attach(bone_name: String, node: Node3D, body_xform: Transform3D) -> void:
+	var bone := _bone(bone_name)
+	var holder := BoneAttachment3D.new()
+	holder.bone_name = bone_name
+	skeleton.add_child(holder)
+	node.transform = skeleton.get_bone_global_rest(bone).affine_inverse() * body_xform
+	holder.add_child(node)
+
+
+func rest_origin(bone_name: String) -> Vector3:
+	return skeleton.get_bone_global_rest(_bone(bone_name)).origin
+
+
+func _bone(bone_name: String) -> int:
+	if not _bones.has(bone_name):
+		_bones[bone_name] = skeleton.find_bone(bone_name)
+	return _bones[bone_name]
