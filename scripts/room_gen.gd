@@ -49,6 +49,14 @@ static func generate(seed_in: int, player_count := 2, difficulty := 0) -> RefCou
 	return room
 
 
+## A hand-made room from text rows (see scripts/maps.gd for the symbols).
+static func from_layout(lines: Array, player_count := 2, pace_in := 1.0) -> RefCounted:
+	var room = new()
+	room.pace = pace_in
+	room._load(lines, clampi(player_count, 2, MAX_PLAYERS))
+	return room
+
+
 static func pace_for(lvl: int) -> float:
 	return minf(1.0 + LEVEL_PACE * maxi(lvl, 0), MAX_PACE)
 
@@ -141,6 +149,34 @@ func _build(seed_in: int, player_count: int) -> void:
 	_place_cover(rng)
 	_place_crates(rng)
 	_place_enemies(rng)
+	_merge_boxes()
+
+
+func _load(lines: Array, player_count: int) -> void:
+	players = player_count
+	rows = lines.size()
+	cols = str(lines[0]).length()
+	solid.resize(cols * rows)
+	solid.fill(0)
+	var spawn_at := {}
+	var kinds := {"g": Kind.GUNMAN, "k": Kind.KNIFE, "f": Kind.FISTS}
+	for y in rows:
+		var line := str(lines[y])
+		for x in mini(cols, line.length()):
+			var ch := line[x]
+			var c := Vector2i(x, y)
+			if ch == "#":
+				_mark(c, WALL)
+			elif ch == "c":
+				_mark(c, CRATE)
+				crates.append(c)
+			elif ch in ["1", "2", "3", "4"]:
+				spawn_at[ch.to_int()] = c
+			elif kinds.has(ch.to_lower()) and (ch == ch.to_lower() or players >= 3):
+				enemy_cells.append(c)
+				enemy_kinds.append(kinds[ch.to_lower()])
+	for i in players:
+		spawns.append(spawn_at.get(i + 1, Vector2i(1 + i, 1)))
 	_merge_boxes()
 
 

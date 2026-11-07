@@ -35,6 +35,7 @@ const LanDiscovery := preload("res://scripts/lan_discovery.gd")
 const DualServerPeer := preload("res://scripts/dual_server_peer.gd")
 const Clock := preload("res://scripts/clock.gd")
 const PauseMenu := preload("res://scripts/pause_menu.gd")
+const Maps := preload("res://scripts/maps.gd")
 
 enum Phase { LOBBY, PLAYING, OVER }
 
@@ -57,7 +58,7 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Network protocol version. Bump it whenever an RPC's arguments change, so
 ## mismatched builds refuse each other with a clear message instead of
 ## failing on individual RPCs.
-const PROTOCOL := 10
+const PROTOCOL := 11
 const MAX_PLAYERS := 4
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
@@ -575,7 +576,9 @@ func _party_broadcast(note: String) -> void:
 		var m: Dictionary = _party[id]
 		members.append([id, m["name"], m["role"], m["ready"]])
 	var info := "NEW GAME"
-	if _party_resume and _round_mode == "endless":
+	if _party_resume and Maps.is_fixed(_round_mode):
+		info = "%s  ·  ATTEMPT %d" % [Maps.display_name(_round_mode), _resume_attempt()]
+	elif _party_resume and _round_mode == "endless":
 		info = "ROOM %d  ·  SAME RUN" % (room_no + (1 if _round_end == "cleared" else 0))
 	elif _party_resume:
 		info = "ROOM %d  ·  ATTEMPT %d  ·  SAME MAP" % [room_no, _resume_attempt()]
@@ -705,8 +708,11 @@ func request_party() -> void:
 
 ## Going back to the lobby keeps the game going, except after an Endless
 ## run has ended: there are no retries.
+## Same for a hand-made map that was just cleared.
 func _can_resume() -> bool:
-	return not (_round_mode == "endless" and _round_end == "died")
+	if _round_mode == "endless" and _round_end == "died":
+		return false
+	return not (Maps.is_fixed(_round_mode) and _round_end == "cleared")
 
 
 ## The attempt number a resumed game continues with: a death that just
@@ -878,7 +884,10 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 	_round_end = ""
 	_round_mode = mode
 	roster = team
-	room = RoomGen.generate(seed_in, team.size(), _difficulty(mode, number))
+	if Maps.is_fixed(mode):
+		room = Maps.build(mode, team.size())
+	else:
+		room = RoomGen.generate(seed_in, team.size(), _difficulty(mode, number))
 	astar = RoomBuilder.build_astar(room)
 	round_root = Node3D.new()
 	round_root.name = "Round"
@@ -965,7 +974,7 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 	if mode == "endless":
 		hud.room_no = number
 		hud.best = Lobby.record_endless(team.size(), number)
-	hud.banner("ROOM %d" % number, Palette.SIGNAL)
+	hud.banner(Maps.display_name(mode) if Maps.is_fixed(mode) else "ROOM %d" % number, Palette.SIGNAL)
 	if not _bot_mode:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -1010,6 +1019,15 @@ func room_cleared() -> void:
 	_round_end = "cleared"
 	hud.banner("CLEAR!", Palette.ENEMY)
 	_log_event("room cleared")
+	if Maps.is_fixed(_round_mode):
+		# A hand-made map is done once it's cleared: back to the match lobby.
+		var map_name := Maps.display_name(_round_mode)
+		if not _dedicated:
+			Lobby.record_cleared(_round_mode)
+		if multiplayer.is_server():
+			_later(NEXT_ROOM_DELAY, func(): _finish_game("%s cleared in %d %s!"
+				% [map_name, attempt, "try" if attempt == 1 else "tries"]))
+		return
 	if multiplayer.is_server():
 		_later(NEXT_ROOM_DELAY, func(): start_round.rpc(_new_seed(), room_no + 1, 1, roster, _round_mode))
 
@@ -1051,7 +1069,8 @@ func all_down() -> void:
 		hud.banner("RUN OVER  ·  ROOM %d" % room_no, Palette.DANGER)
 		_log_event("run over at room %d" % room_no)
 		if multiplayer.is_server():
-			_later(RUN_OVER_DELAY, _end_run)
+			var reached := room_no
+			_later(RUN_OVER_DELAY, func(): _finish_game("Run over at room %d." % reached))
 		return
 	hud.banner("EVERYONE'S DOWN", Palette.DANGER)
 	_log_event("everyone down")
@@ -1059,9 +1078,9 @@ func all_down() -> void:
 		_later(RESTART_DELAY, func(): start_round.rpc(room_seed, room_no, attempt + 1, roster, _round_mode))
 
 
-## Host: an Endless run ended. Everyone back to the match lobby for a new run.
-func _end_run() -> void:
-	var reached := room_no
+## Host: an Endless run ended or a hand-made map was cleared. Everyone back
+## to the match lobby for a new game.
+func _finish_game(note: String) -> void:
 	_clear_round()
 	round_id += 1
 	phase = Phase.LOBBY
@@ -1070,9 +1089,9 @@ func _end_run() -> void:
 		m["ready"] = false
 	_update_advertising()
 	if not _dedicated and _party_order.size() <= 1:
-		_host_show_waiting("Run over at room %d." % reached)
+		_host_show_waiting(note)
 	else:
-		_party_broadcast("Run over at room %d." % reached)
+		_party_broadcast(note)
 
 
 ## Host -> everyone: a player left mid-game and the rest carry on.

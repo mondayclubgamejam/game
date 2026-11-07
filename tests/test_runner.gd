@@ -5,6 +5,7 @@ extends SceneTree
 const RoomGen := preload("res://scripts/room_gen.gd")
 const Traj := preload("res://scripts/trajectory.gd")
 const Lan := preload("res://scripts/lan_discovery.gd")
+const Maps := preload("res://scripts/maps.gd")
 
 var _failed := 0
 var _passed := 0
@@ -15,6 +16,7 @@ func _initialize() -> void:
 	test_crates_are_placed_sensibly()
 	test_rooms_scale_with_players()
 	test_endless_ramps_up_with_caps()
+	test_hand_made_maps()
 	test_rooms_are_connected_and_populated()
 	test_different_seeds_differ()
 	test_merged_boxes_cover_exactly_the_walls()
@@ -220,6 +222,65 @@ func test_endless_ramps_up_with_caps() -> void:
 				check(share > prev_gunmen - 0.05, "%dp level %d: gunman share holds or grows" % [n, lvl])
 			prev = avg
 			prev_gunmen = share
+
+
+## The six hand-made maps: well formed, connected, fair at the start, and
+## harder one after another.
+func test_hand_made_maps() -> void:
+	var prev_count := {2: 0, 3: 0, 4: 0}
+	var prev_pace := 0.0
+	var prev_gunmen := {2: -1, 3: -1, 4: -1}
+	for id in Maps.ORDER:
+		var m: Dictionary = Maps.ALL[id]
+		var lines: Array = m["rows"]
+		var w := str(lines[0]).length()
+		for y in lines.size():
+			var line := str(lines[y])
+			check(line.length() == w, "%s row %d is %d wide, not %d" % [id, y, line.length(), w])
+			check(line[0] == "#" and line[w - 1] == "#", "%s row %d has side walls" % [id, y])
+			if y == 0 or y == lines.size() - 1:
+				check(line == "#".repeat(w), "%s top/bottom row is all wall" % id)
+		for d in ["1", "2", "3", "4"]:
+			check("".join(lines).count(d) == 1, "%s has exactly one spawn %s" % [id, d])
+		check(m["pace"] > prev_pace, "%s is faster than the map before" % id)
+		prev_pace = m["pace"]
+		for n in [2, 3, 4]:
+			var r = Maps.build(id, n)
+			check(r.spawns.size() == n, "%s %dp: one spawn each" % [id, n])
+			check(r.reachable_count(r.spawns[0]) == r.floor_count(), "%s %dp: every floor cell reachable" % [id, n])
+			var gunmen := 0
+			for i in r.enemy_cells.size():
+				var c: Vector2i = r.enemy_cells[i]
+				check(not r.is_solid(c), "%s %dp: enemy %s on the floor" % [id, n, c])
+				check(Vector2(c).distance_to(r.spawn_center()) >= 5.0, "%s %dp: enemy %s away from the spawn" % [id, n, c])
+				if r.enemy_kinds[i] == RoomGen.Kind.GUNMAN:
+					gunmen += 1
+					# The easy maps never put a gunman in view of the spawn.
+					if Maps.ORDER.find(id) < 3:
+						for sp in r.spawns:
+							check(not _wall_sight(r, c, sp), "%s %dp: gunman %s can't see spawn %s" % [id, n, c, sp])
+			for sp in r.spawns:
+				check(not r.is_solid(sp), "%s %dp: spawn %s is free" % [id, n, sp])
+			check(r.enemy_cells.size() > prev_count[n], "%s %dp: more enemies (%d) than the map before" % [id, n, r.enemy_cells.size()])
+			check(gunmen >= prev_gunmen[n], "%s %dp: at least as many gunmen (%d)" % [id, n, gunmen])
+			if n == 2 or n == 4:
+				print("  map %-10s %dp: %2d enemies (%2d gunmen), pace %.2f, %dx%d" % [id, n, r.enemy_cells.size(), gunmen, r.pace, r.cols, r.rows])
+			prev_count[n] = r.enemy_cells.size()
+			prev_gunmen[n] = gunmen
+
+
+## True if a straight line between two cells crosses no full wall (crates are
+## low, so they don't block a standing player).
+func _wall_sight(r, a: Vector2i, b: Vector2i) -> bool:
+	var from := Vector2(a) + Vector2(0.5, 0.5)
+	var to := Vector2(b) + Vector2(0.5, 0.5)
+	var steps := int(from.distance_to(to) * 8.0)
+	for i in steps:
+		var p := from.lerp(to, float(i) / steps)
+		var c := Vector2i(floori(p.x), floori(p.y))
+		if c != a and c != b and r.is_wall(c):
+			return false
+	return true
 
 
 func test_rooms_scale_with_players() -> void:

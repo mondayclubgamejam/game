@@ -30,13 +30,16 @@ const MAPS := [
 	{"id": "tutorial", "name": "TUTORIAL", "sub": "LEARN THE LOOP", "ready": false},
 	{"id": "random", "name": "RANDOM", "sub": "A NEW ROOM EVERY TIME", "ready": true},
 	{"id": "endless", "name": "ENDLESS", "sub": "HOW FAR CAN YOU GET?", "ready": true},
-	{"id": "", "name": "", "sub": "", "ready": false},
-	{"id": "", "name": "", "sub": "", "ready": false},
-	{"id": "", "name": "", "sub": "", "ready": false},
-	{"id": "", "name": "", "sub": "", "ready": false},
-	{"id": "", "name": "", "sub": "", "ready": false},
-	{"id": "", "name": "", "sub": "", "ready": false},
+	# Hand-made maps (scripts/maps.gd), easiest first.
+	{"id": "warmup", "name": "WARM UP", "sub": "SUPER EASY", "ready": true, "tier": 1},
+	{"id": "yard", "name": "THE YARD", "sub": "EASY", "ready": true, "tier": 2},
+	{"id": "crossfire", "name": "CROSSFIRE", "sub": "MEDIUM", "ready": true, "tier": 3},
+	{"id": "maze", "name": "THE MAZE", "sub": "HARD", "ready": true, "tier": 4},
+	{"id": "gauntlet", "name": "GAUNTLET", "sub": "VERY HARD", "ready": true, "tier": 5},
+	{"id": "giggles", "name": "SHITS & GIGGLES", "sub": "GOOD LUCK", "ready": true, "tier": 6},
 ]
+## Tile colours for the hand-made maps, by difficulty: green to purple.
+const TIER_COLORS := [Color("3ecf6e"), Color("a5d93a"), Color("f2c230"), Color("ff8a2a"), Color("ff3d4a"), Color("b04bff")]
 const DEFAULT_MAP := "random"
 ## The match lobby panel (1280 x 720 layout) and its slant. The map grid
 ## fills the same height and its right edge runs parallel to the panel's
@@ -63,6 +66,19 @@ static func endless_best(players: int) -> int:
 	if cfg.load(SETTINGS) != OK:
 		return 0
 	return int(cfg.get_value("endless", "best_%d" % players, 0))
+
+
+## Whether this computer's player has cleared hand-made map `id`.
+static func is_cleared(id: String) -> bool:
+	var cfg := ConfigFile.new()
+	return cfg.load(SETTINGS) == OK and bool(cfg.get_value("cleared", id, false))
+
+
+static func record_cleared(id: String) -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS)
+	cfg.set_value("cleared", id, true)
+	cfg.save(SETTINGS)
 
 
 ## Remembers `room` as the best Endless room for this many players if it is.
@@ -361,7 +377,8 @@ func _build_maps() -> void:
 		box.alignment = BoxContainer.ALIGNMENT_CENTER
 		box.add_theme_constant_override("separation", 0)
 		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		box.add_child(_label(m["name"] if m["name"] != "" else "?", 30, Color.WHITE, 7, Vector2.ZERO))
+		var title := str(m["name"])
+		box.add_child(_label(title, 30 if title.length() <= 10 else 22, Color.WHITE, 7, Vector2.ZERO))
 		var sub := _label("", 13, Palette.INK, 0, Vector2.ZERO)
 		sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(sub)
@@ -386,10 +403,14 @@ func _show_maps(selected: String, is_host: bool, players: int) -> void:
 			var best := endless_best(clampi(players, 2, MAX_PLAYERS))
 			if best > 0:
 				sub.text += "\nBEST  ·  ROOM %d" % best
+		var tier: int = m.get("tier", 0)
+		var base: Color = TIER_COLORS[tier - 1] if tier > 0 else Palette.SIGNAL
+		if tier > 0 and is_cleared(m["id"]):
+			sub.text += "  ·  CLEARED"
 		if picked:
-			fill = Palette.SIGNAL
+			fill = base
 		elif m["ready"]:
-			fill = Palette.SIGNAL.darkened(0.45)
+			fill = base.darkened(0.45)
 		elif m["id"] != "":
 			fill = Palette.MUTED.darkened(0.3)
 			sub.text = "COMING SOON"
