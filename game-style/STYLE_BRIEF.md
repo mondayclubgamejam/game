@@ -72,10 +72,16 @@ obvious at once.
 - **Timing:** snappy attacks (under 0.06 s) with soft, overshooting recovery
   (`TRANS_BACK`). Nothing floats.
 - **Walk bob:** a figure-eight sway that grows with speed.
-- **Enemies:** faceless, faceted low-poly mannequins in magenta, with a belt and weapon coloured by kind. Rigid parts: the legs swing to walk and the weapon arm winds up. Model: `tools/blender/enemy.py`.
+- **Enemies:** faceless, faceted low-poly mannequins in magenta with a light rim, a belt, weapon and glowing visor in the kind colour. Model: `tools/blender/enemy.py`. Animation is procedural (`scripts/enemy_rig.gd`): every pose has anticipation and follow-through.
+  - Gunman: low ready, two-handed aim, recoil and muzzle flash, reload.
+  - Swordsman: guard with the blade angled forward, lifts it high behind the head, then a diagonal slash with a lunge and a white trail.
+  - Knife fighter: a fighting crouch, both knives drawn back, then a double stab lunge.
 - **Weapons:** near-black metal with one accent in the kind colour: a pistol with a red muzzle band, a curved sword with a blue-steel blade, a lime-guarded knife in each hand for the knife fighters. The players' revolver has a cylinder that glows orange when loaded. Models: `tools/blender/weapons.py`.
-- **Enemy death:** bursts into 12 tumbling cubes that shrink away after 2 to 3 s.
-  Later, the recall could reassemble them in reverse.
+- **Enemy death:** flashes white, topples away from the shot and shrinks away,
+  while 12 tumbling cubes burst out. Later, the recall could reassemble them in reverse.
+- **Menus:** live 3D scene behind a see-through comic overlay; the title drops in
+  and floats; buttons ease up on hover and squash on click; pages fade; map
+  tiles deal in; pause blurs the game.
 - **Doors:** wind up, then rise fast (`TRANS_BACK`, ease in).
 
 ## UI and cut-ins (see `scripts/hud.gd`)
