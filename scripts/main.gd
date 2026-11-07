@@ -7,6 +7,11 @@ extends Node3D
 ##   - each player owns their own movement and the bullet they launch
 ##   - each player decides hits on themselves (enemy shots, melee, friendly fire)
 ##   - the host owns the room seed, enemy brains, enemy deaths and gun pickups
+##
+## The "host" is either a player (LAN play) or a dedicated server started
+## with --server, which plays nobody and relays between two clients. Players
+## reach the server over UDP, or over a WebSocket on HTTPS (port 443) when
+## UDP is blocked.
 
 const Palette := preload("res://scripts/palette.gd")
 const RoomGen := preload("res://scripts/room_gen.gd")
@@ -25,6 +30,7 @@ const Hand := preload("res://scripts/hand.gd")
 const Lobby := preload("res://scripts/lobby.gd")
 const Bot := preload("res://scripts/bot.gd")
 const LanDiscovery := preload("res://scripts/lan_discovery.gd")
+const DualServerPeer := preload("res://scripts/dual_server_peer.gd")
 
 enum Phase { LOBBY, PLAYING, OVER }
 
@@ -43,6 +49,9 @@ const MASK_WORLD := 1
 const MASK_ENEMY := 2
 const MASK_PLAYER := 4
 const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
+const WS_PORT := 8080          ## dedicated server's plain WebSocket port (behind HTTPS)
+const UDP_TRY_SECONDS := 2.5   ## how long to try UDP before falling back to WebSocket
+const WS_TRY_SECONDS := 8.0
 
 var phase := Phase.LOBBY
 var room_seed := 0
@@ -86,6 +95,13 @@ var _peaceful := false
 var _bot_mode := false
 var _net_role := "offline"
 var _auto_join_lan := false
+var _dedicated := false        ## this process is a --server
+var _relayed := false          ## this client plays through a dedicated server
+var _queue: Array[int] = []    ## server: connected players, in join order
+var _conn_stage := ""          ## client: "", "udp" or "ws" while connecting online
+var _conn_attempt := 0
+var _online_ws_url := ""
+var _ws_ca := ""             ## extra trusted CA file for wss (testing with a private CA)
 
 
 func _ready() -> void:
@@ -114,7 +130,9 @@ func _ready() -> void:
 	add_child(lan)
 	lan.hosts_changed.connect(_on_lan_hosts)
 	lobby.cancel_requested.connect(func(): _back_to_lobby("", false))
-	_search_lan()
+	lobby.online_requested.connect(join_online)
+	if not OS.get_cmdline_user_args().has("--server"):
+		_search_lan()
 
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -128,7 +146,8 @@ func _ready() -> void:
 ## machines) is too slow to play and can freeze. Restart on the much lighter
 ## OpenGL renderer instead. Pass --no-gl-fallback to skip this.
 func _relaunch_if_software_rendering() -> bool:
-	if RenderingServer.get_current_rendering_method() != "forward_plus" \
+	if DisplayServer.get_name() == "headless" \
+			or RenderingServer.get_current_rendering_method() != "forward_plus" \
 			or RenderingServer.get_video_adapter_type() != RenderingDevice.DEVICE_TYPE_CPU \
 			or OS.get_cmdline_user_args().has("--no-gl-fallback"):
 		return false
@@ -147,11 +166,25 @@ func _relaunch_if_software_rendering() -> bool:
 
 func _parse_args() -> void:
 	var port := Lobby.DEFAULT_PORT
+	var ws_port := WS_PORT
+	var ws_bind := "*"
 	var host := false
+	var server := false
 	var join := ""
+	var online := ""
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--host":
 			host = true
+		elif arg == "--server":
+			server = true
+		elif arg.begins_with("--ws-port="):
+			ws_port = arg.trim_prefix("--ws-port=").to_int()
+		elif arg.begins_with("--ws-bind="):
+			ws_bind = arg.trim_prefix("--ws-bind=")
+		elif arg.begins_with("--online="):
+			online = arg.trim_prefix("--online=")
+		elif arg.begins_with("--ws-ca="):
+			_ws_ca = arg.trim_prefix("--ws-ca=")  # trust this CA too (testing with a private CA)
 		elif arg == "--join=lan":
 			_auto_join_lan = true  # join the first game found on the LAN
 		elif arg.begins_with("--join="):
@@ -175,10 +208,14 @@ func _parse_args() -> void:
 					DirAccess.make_dir_recursive_absolute(child.shots_dir)
 		elif arg.begins_with("--quit-after="):
 			get_tree().create_timer(arg.trim_prefix("--quit-after=").to_float()).timeout.connect(get_tree().quit)
-	if host:
+	if server:
+		_start_dedicated(port, ws_port, ws_bind)
+	elif host:
 		host_game(port)
 	elif join != "":
 		join_game(join, port)
+	elif online != "":
+		join_online(online)
 
 
 # --- Connection ------------------------------------------------------------------
@@ -228,17 +265,27 @@ func join_game(address: String, port: int) -> void:
 
 
 func _on_peer_connected(id: int) -> void:
-	if multiplayer.is_server() and phase == Phase.LOBBY:
+	if _dedicated:
+		_server_on_join(id)
+	elif multiplayer.is_server() and phase == Phase.LOBBY:
 		_log_event("partner %d joined" % id)
 		start_round.rpc(_new_seed(), 1, multiplayer.get_unique_id(), id)
 
 
 func _on_connected() -> void:
-	lobby.show_busy("CONNECTED. STARTING...")
-	_log_event("connected as %d" % multiplayer.get_unique_id())
+	var via: String = {"udp": "UDP", "ws": "WebSocket"}.get(_conn_stage, "UDP")
+	_conn_stage = ""
+	lobby.show_busy("CONNECTED. WAITING FOR A PARTNER" if _relayed else "CONNECTED. STARTING")
+	_log_event("connected as %d via %s" % [multiplayer.get_unique_id(), via])
 
 
 func _on_connection_failed() -> void:
+	if _conn_stage == "udp":
+		_try_ws()
+		return
+	if _conn_stage == "ws":
+		_online_failed()
+		return
 	_back_to_lobby("Couldn't reach that game. Is it still open, and is the host's firewall letting UDP %d in?"
 		% Lobby.DEFAULT_PORT, true)
 
@@ -255,19 +302,24 @@ func _on_lan_hosts(hosts: Array) -> void:
 		join_game(hosts[0]["ip"], hosts[0]["port"])
 
 
-func _on_peer_disconnected(_id: int) -> void:
-	if multiplayer.is_server():
+func _on_peer_disconnected(id: int) -> void:
+	if _dedicated:
+		_server_on_leave(id)
+	elif multiplayer.is_server():
 		_back_to_lobby("Your partner left.")
 
 
 func _on_server_disconnected() -> void:
-	_back_to_lobby("The host left.")
+	_back_to_lobby("Lost the connection to the server." if _relayed else "The host left.", _relayed)
 
 
 func _back_to_lobby(message: String, is_error := false) -> void:
 	_log_event("back to lobby: " + message)
 	_clear_round()
 	phase = Phase.LOBBY
+	_relayed = false
+	_conn_stage = ""
+	_conn_attempt += 1
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.close()
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
@@ -278,6 +330,143 @@ func _back_to_lobby(message: String, is_error := false) -> void:
 	lan.stop_advertising()
 	_search_lan()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+# --- Dedicated server -----------------------------------------------------------
+
+func _start_dedicated(udp_port: int, ws_port: int, ws_bind: String) -> void:
+	_dedicated = true
+	_net_role = "server"
+	_log = true
+	Engine.max_fps = 120  # no rendering; just keep relays prompt without spinning
+	var peer := DualServerPeer.new()
+	var err := peer.listen(udp_port, ws_port, ws_bind)
+	if err != OK:
+		printerr("Couldn't start the server (error %d). Are UDP %d and TCP %d free?" % [err, udp_port, ws_port])
+		get_tree().quit(1)
+		return
+	multiplayer.multiplayer_peer = peer
+	print("One Gun One Bullet server: UDP %d, WebSocket %s:%d. Waiting for players." % [udp_port, ws_bind, ws_port])
+
+
+func _server_on_join(id: int) -> void:
+	var how: String = multiplayer.multiplayer_peer.transport_of(id)
+	if phase != Phase.LOBBY or _queue.size() >= 2:
+		_log_event("player %d (%s) turned away: a game is already running" % [id, how])
+		server_busy.rpc_id(id)
+		get_tree().create_timer(0.5).timeout.connect(func():
+			if multiplayer.multiplayer_peer != null:
+				multiplayer.multiplayer_peer.disconnect_peer(id))
+		return
+	_queue.append(id)
+	_log_event("player %d connected via %s (%d/2)" % [id, how, _queue.size()])
+	if _queue.size() == 2:
+		start_round.rpc(_new_seed(), 1, _queue[0], _queue[1])
+	else:
+		waiting_for_partner.rpc_id(id, "")
+
+
+func _server_on_leave(id: int) -> void:
+	if not _queue.has(id):
+		return
+	_queue.erase(id)
+	_log_event("player %d left" % id)
+	if phase != Phase.LOBBY:
+		_clear_round()
+		round_id += 1
+		phase = Phase.LOBBY
+		for other in _queue:
+			waiting_for_partner.rpc_id(other, "Your partner left.")
+
+
+## Server -> one client: you're connected, nobody to play with yet.
+@rpc("authority", "call_remote", "reliable")
+func waiting_for_partner(message: String) -> void:
+	_clear_round()
+	phase = Phase.LOBBY
+	hud.visible = false
+	hand.visible = false
+	lobby.visible = true
+	lobby.show_busy("CONNECTED. WAITING FOR A PARTNER", message)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_log_event("waiting for a partner " + message)
+
+
+@rpc("authority", "call_remote", "reliable")
+func server_busy() -> void:
+	_back_to_lobby("The server already has a game running. Try again in a bit.", true)
+
+
+# --- Joining a server online ---------------------------------------------------------
+
+## `address` is "host", "host:port", or a full ws:// / wss:// URL.
+func join_online(address: String) -> void:
+	var text := address.strip_edges()
+	if text == "":
+		lobby.show_menu("Set the server address first.", true)
+		return
+	_relayed = true
+	_auto_join_lan = false
+	lan.stop_searching()
+	if text.begins_with("ws://") or text.begins_with("wss://"):
+		_online_ws_url = text
+		_try_ws()
+		return
+	var host := text
+	var port := Lobby.DEFAULT_PORT
+	if text.count(":") == 1:
+		host = text.get_slice(":", 0)
+		port = text.get_slice(":", 1).to_int()
+	# A bare IP has no certificate, so its WebSocket is plain on WS_PORT;
+	# a domain name goes through HTTPS on 443.
+	_online_ws_url = "ws://%s:%d" % [host, WS_PORT] if host.is_valid_ip_address() else "wss://%s/" % host
+	_try_udp(host, port)
+
+
+func _try_udp(host: String, port: int) -> void:
+	_conn_stage = "udp"
+	_conn_attempt += 1
+	var attempt := _conn_attempt
+	var peer := ENetMultiplayerPeer.new()
+	if peer.create_client(host, port) != OK:
+		_try_ws()
+		return
+	multiplayer.multiplayer_peer = peer
+	_net_role = "client"
+	lobby.show_busy("CONNECTING TO %s" % host.to_upper())
+	_log_event("trying UDP to %s:%d" % [host, port])
+	get_tree().create_timer(UDP_TRY_SECONDS).timeout.connect(func():
+		if attempt == _conn_attempt and _conn_stage == "udp":
+			_try_ws())
+
+
+func _try_ws() -> void:
+	_conn_stage = "ws"
+	_conn_attempt += 1
+	var attempt := _conn_attempt
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer.close()
+	var peer := WebSocketMultiplayerPeer.new()
+	# Normal certificate checks (Let's Encrypt is trusted out of the box).
+	var tls: TLSOptions = null
+	if _ws_ca != "":
+		var ca := X509Certificate.new()
+		if ca.load(_ws_ca) == OK:
+			tls = TLSOptions.client(ca)
+	if peer.create_client(_online_ws_url, tls) != OK:
+		_online_failed()
+		return
+	multiplayer.multiplayer_peer = peer
+	_net_role = "client"
+	lobby.show_busy("CONNECTING OVER HTTPS")
+	_log_event("trying WebSocket %s" % _online_ws_url)
+	get_tree().create_timer(WS_TRY_SECONDS).timeout.connect(func():
+		if attempt == _conn_attempt and _conn_stage == "ws":
+			_online_failed())
+
+
+func _online_failed() -> void:
+	_back_to_lobby("Couldn't reach the server over UDP or HTTPS. Check the address, and that the server is running.", true)
 
 
 func _connected() -> bool:
@@ -315,7 +504,8 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 		p.place(RoomGen.cell_center(spec[2]) + Vector3(0, 0.05, 0), PI)  # face into the room
 		players[spec[0]] = p
 	local_player = players.get(me)
-	partner = players[b_peer if me == a_peer else a_peer]
+	if local_player != null:
+		partner = players[b_peer if me == a_peer else a_peer]
 
 	for i in room.enemy_cells.size():
 		var e := Enemy.new()
@@ -341,9 +531,10 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 	bullet.arrived.connect(_on_bullet_arrived)
 	tracers = Tracers.new()
 	round_root.add_child(tracers)
-	tracers.local_body = local_player
-	tracers.ignore.append(partner.get_rid())
-	tracers.hit_local.connect(_on_local_shot)
+	if local_player != null:
+		tracers.local_body = local_player
+		tracers.ignore.append(partner.get_rid())
+		tracers.hit_local.connect(_on_local_shot)
 	debris = Debris.new()
 	round_root.add_child(debris)
 	aim_line = AimLine.new()
@@ -356,6 +547,9 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 
 	lan.stop_advertising()  # one partner per game
 	lan.stop_searching()
+	_log_event("round %d seed %d: %d enemies" % [number, seed_in, enemies.size()])
+	if local_player == null:
+		return  # dedicated server: no screen to update
 	lobby.visible = false
 	hud.visible = true
 	hand.visible = true
@@ -366,7 +560,6 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 	hud.banner("ROOM %d" % number, Palette.SIGNAL)
 	if not _bot_mode:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-	_log_event("round %d seed %d: %d enemies" % [number, seed_in, enemies.size()])
 
 
 func _clear_round() -> void:
@@ -381,6 +574,9 @@ func _clear_round() -> void:
 	partner = null
 	gun = null
 	bullet = null
+	tracers = null
+	debris = null
+	aim_line = null
 
 
 ## Runs `fn` after `seconds` unless a new round started in between.
@@ -729,8 +925,8 @@ func enemy_strike(id: int, origin: Vector3, dir: Vector3) -> void:
 	if not e.alive or phase != Phase.PLAYING:
 		return
 	if e.kind == RoomGen.Kind.GUNMAN:
-		tracers.spawn(origin, dir, 0.0 if multiplayer.is_server() else _one_way())
-	elif local_player.alive:
+		tracers.spawn(origin, dir, 0.0 if multiplayer.is_server() else _one_way(true))
+	elif local_player != null and local_player.alive:
 		var to: Vector3 = local_player.global_position - e.global_position
 		to.y = 0.0
 		var facing: Vector3 = -e.global_basis.z
@@ -770,19 +966,29 @@ func net_pong(t: int) -> void:
 	rtt = sample if rtt <= 0.0 else lerpf(rtt, sample, 0.6 if sample < rtt else 0.15)
 
 
-func _one_way() -> float:
-	return clampf(rtt * 0.5, 0.0, 0.25)
+## Estimated delay of a message from its sender to us. Through a dedicated
+## server, another player's message takes two hops (them -> server -> us).
+func _one_way(from_server := false) -> float:
+	var hops := 1.0 if (from_server or not _relayed) else 2.0
+	return clampf(rtt * 0.5 * hops, 0.0, 0.3)
 
 
 func _physics_process(delta: float) -> void:
-	if phase == Phase.LOBBY or local_player == null or not _connected():
+	if not _connected():
 		return
-	net_player_state.rpc(local_player.global_position, local_player.rotation.y, local_player.pitch())
-
-	_ping_t -= delta
-	if _ping_t <= 0.0:
-		_ping_t = PING_INTERVAL
-		net_ping.rpc(Time.get_ticks_usec())
+	if phase == Phase.LOBBY:
+		multiplayer.poll()
+		return
+	if local_player != null:
+		net_player_state.rpc(local_player.global_position, local_player.rotation.y, local_player.pitch())
+		_ping_t -= delta
+		if _ping_t <= 0.0:
+			_ping_t = PING_INTERVAL
+			# Ping whoever hosts: the server when relayed, else the partner.
+			if multiplayer.is_server():
+				net_ping.rpc(Time.get_ticks_usec())
+			else:
+				net_ping.rpc_id(1, Time.get_ticks_usec())
 
 	if multiplayer.is_server():
 		_sync_t -= delta
@@ -795,10 +1001,10 @@ func _physics_process(delta: float) -> void:
 				_enemy_buf[i * 3 + 2] = e.rotation.y
 			enemy_sync.rpc(_enemy_buf)
 
-	if phase == Phase.PLAYING and local_player.alive:
+	if local_player != null and phase == Phase.PLAYING and local_player.alive:
 		_check_gun_pickup()
 		_update_preview()
-	else:
+	elif aim_line != null:
 		aim_line.hide_path()
 		_set_targets([])
 	_update_carry()

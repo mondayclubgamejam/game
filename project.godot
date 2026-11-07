@@ -38,3 +38,7 @@ lights_and_shadows/directional_shadow/soft_shadow_filter_quality=0
 [audio]
 
 driver/driver="Dummy"
+
+[game]
+
+online_server=""

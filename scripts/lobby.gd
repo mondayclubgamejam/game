@@ -5,16 +5,19 @@ extends Control
 signal host_requested(port: int)
 signal join_requested(address: String, port: int)
 signal cancel_requested
+signal online_requested(address: String)
 
 const Palette := preload("res://scripts/palette.gd")
 const TitleFont := preload("res://assets/fonts/Anton-Regular.ttf")
 const BgShader := preload("res://shaders/menu_bg.gdshader")
 const DEFAULT_PORT := 7777
 const PAPER := Color("f3e9d2")
+const SETTINGS := "user://settings.cfg"
 
 var _menu: VBoxContainer
 var _wait: VBoxContainer
 var _name: LineEdit
+var _server: LineEdit
 var _address: LineEdit
 var _lan_list: VBoxContainer
 var _lan_empty: Label
@@ -47,10 +50,15 @@ func _ready() -> void:
 	_build_title()
 	_build_panel()
 	_build_message_strip()
+	_load_settings()
 	show_menu("", false)
 
 
 # --- Public -------------------------------------------------------------------
+
+func server_address() -> String:
+	return _server.text.strip_edges()
+
 
 func player_name() -> String:
 	var n := _name.text.strip_edges().to_upper()
@@ -80,7 +88,7 @@ func show_hosting(port: int, ips: Array, hint: String, answering: bool) -> void:
 	_set_message("", false)
 
 
-func show_busy(text: String) -> void:
+func show_busy(text: String, note := "") -> void:
 	_menu.visible = false
 	_wait.visible = true
 	_wait_title.text = "JOINING"
@@ -88,7 +96,7 @@ func show_busy(text: String) -> void:
 	_wait_sub_base = text
 	_wait_addresses.visible = false
 	_wait_hint.visible = false
-	_set_message("", false)
+	_set_message(note, false)
 
 
 ## One JOIN card per game found on the LAN.
@@ -149,19 +157,25 @@ func _build_panel() -> void:
 	_menu.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	stack.add_child(_menu)
 
-	_menu.add_child(_heading("YOUR NAME", Palette.MUTED.lightened(0.5)))
 	var login := OS.get_environment("USERNAME") if OS.has_feature("windows") else OS.get_environment("USER")
 	_name = _field(login.to_upper().left(16), "YOUR NAME")
 	_name.max_length = 16
-	_menu.add_child(_name)
+	_menu.add_child(_labelled_row("NAME", _name))
 
-	_menu.add_child(_spacer(4))
-	_menu.add_child(_card("HOST A GAME", "YOU PLAY FORWARD  ·  YOU FIRE THE BULLET", Palette.FORWARD,
-		func(): host_requested.emit(DEFAULT_PORT)))
+	_menu.add_child(_spacer(2))
+	_menu.add_child(_card("PLAY ONLINE", "THROUGH THE SERVER  ·  WORKS ON EDUROAM",
+		Palette.SIGNAL, func():
+			_save_settings()
+			online_requested.emit(server_address())))
+	_server = _field("", "your-server.duckdns.org")
+	_server.text_submitted.connect(func(_text: String):
+		_save_settings()
+		online_requested.emit(server_address()))
+	_menu.add_child(_labelled_row("SERVER", _server))
 
 	_menu.add_child(_spacer(6))
 	var lan_head := HBoxContainer.new()
-	lan_head.add_child(_heading("GAMES ON YOUR NETWORK", Palette.SIGNAL))
+	lan_head.add_child(_heading("ON THIS NETWORK", Palette.SIGNAL))
 	var fill := Control.new()
 	fill.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lan_head.add_child(fill)
@@ -169,6 +183,8 @@ func _build_panel() -> void:
 	lan_head.add_child(_lan_count)
 	_menu.add_child(lan_head)
 
+	_menu.add_child(_card("HOST A GAME", "YOU PLAY FORWARD  ·  YOU FIRE THE BULLET", Palette.FORWARD,
+		func(): host_requested.emit(DEFAULT_PORT)))
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -179,7 +195,7 @@ func _build_panel() -> void:
 	_lan_list = VBoxContainer.new()
 	_lan_list.add_theme_constant_override("separation", 8)
 	list_box.add_child(_lan_list)
-	_lan_empty = _label("SCANNING YOUR NETWORK", 20, Palette.MUTED.lightened(0.45), 0, Vector2.ZERO)
+	_lan_empty = _label("SCANNING YOUR NETWORK", 18, Palette.MUTED.lightened(0.45), 0, Vector2.ZERO)
 	list_box.add_child(_lan_empty)
 
 	_menu.add_child(_heading("OR JOIN BY ADDRESS", Palette.MUTED.lightened(0.5)))
@@ -254,6 +270,26 @@ func _process(delta: float) -> void:
 		_wait_sub.text = _wait_sub_base + dots
 
 
+## Remembers the name and server between runs. The server defaults to the
+## project setting game/online_server, so a build can ship with it filled in.
+func _load_settings() -> void:
+	_server.text = str(ProjectSettings.get_setting("game/online_server", ""))
+	var cfg := ConfigFile.new()
+	if cfg.load(SETTINGS) == OK:
+		_server.text = str(cfg.get_value("online", "server", _server.text))
+		var saved := str(cfg.get_value("player", "name", ""))
+		if saved != "":
+			_name.text = saved
+
+
+func _save_settings() -> void:
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS)
+	cfg.set_value("online", "server", server_address())
+	cfg.set_value("player", "name", _name.text.strip_edges())
+	cfg.save(SETTINGS)
+
+
 func _join_typed() -> void:
 	var text := _address.text.strip_edges()
 	if text == "":
@@ -282,6 +318,21 @@ func _label(text: String, size_px: int, color: Color, outline: int, pos: Vector2
 		l.add_theme_color_override("font_outline_color", Palette.INK)
 		l.add_theme_constant_override("outline_size", outline)
 	return l
+
+
+## A small label to the left of a compact field.
+func _labelled_row(text: String, field: LineEdit) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var l := _heading(text, Palette.MUTED.lightened(0.5))
+	l.custom_minimum_size.x = 64
+	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(l)
+	field.custom_minimum_size.y = 38
+	field.add_theme_font_size_override("font_size", 18)
+	field.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(field)
+	return row
 
 
 func _heading(text: String, color: Color) -> Label:
@@ -324,7 +375,7 @@ func _field(text: String, placeholder: String) -> LineEdit:
 ## Big two-line slanted button.
 func _card(title: String, subtitle: String, color: Color, on_press: Callable) -> Button:
 	var b := Button.new()
-	b.custom_minimum_size.y = 82
+	b.custom_minimum_size.y = 70
 	b.focus_mode = Control.FOCUS_NONE
 	b.add_theme_stylebox_override("normal", _slanted(color))
 	b.add_theme_stylebox_override("hover", _slanted(color.lightened(0.18)))
@@ -333,11 +384,11 @@ func _card(title: String, subtitle: String, color: Color, on_press: Callable) ->
 	var box := VBoxContainer.new()
 	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	box.offset_left = 30
-	box.offset_top = 6
-	box.add_theme_constant_override("separation", -4)
+	box.offset_top = 2
+	box.add_theme_constant_override("separation", -10)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(_label(title, 36, Color.WHITE, 8, Vector2.ZERO))
-	box.add_child(_label(subtitle, 16, Palette.INK, 0, Vector2.ZERO))
+	box.add_child(_label(title, 32, Color.WHITE, 8, Vector2.ZERO))
+	box.add_child(_label(subtitle, 15, Palette.INK, 0, Vector2.ZERO))
 	b.add_child(box)
 	return b
 
