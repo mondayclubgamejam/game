@@ -1,0 +1,14 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# Exports
+/build/
+/export/
+*.pck
+*.zip
+
+# OS / editor
+.DS_Store
+.vscode/
+*.tmp
