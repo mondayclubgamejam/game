@@ -7,6 +7,7 @@ extends CharacterBody3D
 ## you) and jump (Space).
 
 const Palette := preload("res://scripts/palette.gd")
+const Mannequin := preload("res://scripts/mannequin.gd")
 
 const SPEED := 6.5
 const CARRY_SPEED := 3.2     ## the gun is heavy
@@ -49,6 +50,8 @@ var _shape: CollisionShape3D
 var _capsule: CapsuleShape3D
 var _crouch_t := 0.0         ## 0 standing .. 1 crouched, eased
 var _body: Node3D            ## remote: the visible body, squashed when crouching
+var _man: Mannequin = null   ## remote: the human figure (null on the fallback body)
+var _last_pos := Vector3.ZERO
 var _net_pos := Vector3.ZERO
 var _net_vel := Vector3.ZERO
 var _net_yaw := 0.0
@@ -98,6 +101,13 @@ func _build_body() -> void:
 	var color := Palette.role_color(role)
 	_body = Node3D.new()
 	add_child(_body)
+	var man := Mannequin.new()
+	if man.setup(Palette.toon(color), Palette.toon(color.darkened(0.45))):
+		_man = man
+		_body.add_child(man)
+		# The held gun sits in the figure's right hand, arm out along the aim.
+		hand_anchor.position = Vector3(Mannequin.SHOULDER.x, Mannequin.SHOULDER.y - EYE, -Mannequin.REACH)
+		return
 	var body := CapsuleMesh.new()
 	body.radius = 0.36
 	body.height = 1.5
@@ -136,6 +146,22 @@ func _physics_process(delta: float) -> void:
 	else:
 		_remote_follow(delta)
 	_apply_crouch(delta)
+	if _man != null:
+		_pose_body(delta)
+
+
+## Remote figure: legs walk at the speed it's moving; the right arm aims along
+## the view while carrying the gun, otherwise both arms swing.
+func _pose_body(delta: float) -> void:
+	var moved := global_position - _last_pos
+	_last_pos = global_position
+	var speed := Vector2(moved.x, moved.z).length() / maxf(delta, 0.001)
+	_man.walk(minf(speed, 8.0), delta)
+	if carrying:
+		_man.bend("upperarm_r", PI * 0.5 + head.rotation.x)
+	else:
+		_man.bend("upperarm_r", _man.swing * 0.7)
+	_man.bend("upperarm_l", -_man.swing * 0.7)
 
 
 func _local_move(delta: float) -> void:
@@ -228,6 +254,7 @@ func apply_net_state(pos: Vector3, yaw: float, pitch_in: float, flags: int) -> v
 
 func place(pos: Vector3, yaw: float) -> void:
 	global_position = pos
+	_last_pos = pos
 	rotation.y = yaw
 	head.rotation.x = 0.0
 	velocity = Vector3.ZERO

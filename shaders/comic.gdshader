@@ -26,6 +26,7 @@ uniform float levels = 6.0;
 uniform float rewind = 0.0;
 uniform float punch = 0.0;
 uniform float slowmo = 0.0;
+uniform float comic = 1.0;          // 0 turns off ink, halftone and posterize (plain shading)
 
 void vertex() {
 	POSITION = vec4(VERTEX.xy, 1.0, 1.0);
@@ -67,7 +68,7 @@ void fragment() {
 
 	// Flat colour: posterize in gamma space so the steps look even.
 	vec3 c = pow(max(texture(screen_tex, uv).rgb, vec3(0.0)), vec3(0.4545));
-	c = floor(c * levels + 0.5) / levels;
+	c = mix(c, floor(c * levels + 0.5) / levels, comic);
 	float lum = dot(c, vec3(0.299, 0.587, 0.114));
 
 	// Slow motion: drain most of the colour toward a cool grey.
@@ -87,11 +88,11 @@ void fragment() {
 	float dist = length(fract(g) - 0.5);
 	float dots = (1.0 - smoothstep(r - 0.07, r + 0.07, dist)) * step(0.02, tone);
 	vec3 dot_col = mix(c * 0.4 + pow(ink, vec3(0.4545)) * 0.25, vec3(1.0), rewind);
-	c = mix(c, dot_col, dots * 0.55);
+	c = mix(c, dot_col, dots * 0.55 * comic);
 
 	// Ink lines: dark forward, white while rewinding.
 	vec3 ink_g = mix(pow(ink, vec3(0.4545)), vec3(0.94, 0.99, 1.0), rewind);
-	c = mix(c, ink_g, edge);
+	c = mix(c, ink_g, edge * comic);
 
 	// Kill punch: crush to paper / ink for a beat.
 	vec3 paper = vec3(0.98, 0.95, 0.88);
@@ -99,7 +100,7 @@ void fragment() {
 
 	// Vignette.
 	vec2 q = (uv - 0.5) * vec2(VIEWPORT_SIZE.x / VIEWPORT_SIZE.y, 1.0);
-	float vig = smoothstep(0.5 - slowmo * 0.15, 1.05, length(q)) * (0.5 + slowmo * 0.3);
+	float vig = smoothstep(0.5 - slowmo * 0.15, 1.05, length(q)) * (mix(0.2, 0.5, comic) + slowmo * 0.3);
 	c = mix(c, mix(pow(ink, vec3(0.4545)), pow(cold_dark, vec3(0.4545)), rewind), vig);
 
 	ALBEDO = pow(c, vec3(2.2));
