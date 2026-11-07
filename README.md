@@ -48,7 +48,7 @@ If you can't change the host's firewall (for example on a locked-down managed ma
 
 | On | Run |
 |---|---|
-| Linux | `./build.sh` |
+| Linux | `tools/build.sh` |
 | Windows | double-click `build.bat` (or run it from a terminal) |
 
 The build works out which OS you're on and builds for it:
@@ -60,7 +60,7 @@ The build works out which OS you're on and builds for it:
 
 Each is a **single self-contained file** with the game packed inside (about 75 MB on Linux, 110 MB on Windows). **Running it needs nothing else, not even Godot**: copy it over and run it (on Linux, `chmod +x` it first if needed). To build for the other OS too, pass `-target windows`, `-target linux` or `-target all`; either OS can build both.
 
-**Building needs nothing installed either.** `build.sh` and `build.bat` run a small prebuilt builder from `tools/bin/` (a static Go program, source in `tools/builder/`): no Python, unzip or curl. It uses Godot 4.7 from `$GODOT` or your PATH if you have it. Otherwise it downloads the official Godot 4.7.2 once into your cache folder (`~/.cache/one-gun-one-bullet`, or `%LOCALAPPDATA%\one-gun-one-bullet` on Windows) and keeps Godot's settings there too. Export templates are read straight out of Godot's 1.3 GB all-platform bundle with HTTP range requests, so only the ~35-40 MB per platform you build for is downloaded. A first build takes about 30 seconds (tested on a bare Rocky Linux 8).
+**Building needs nothing installed either.** `tools/build.sh` and `build.bat` run a small prebuilt builder from `tools/bin/` (a static Go program, source in `tools/builder/`): no Python, unzip or curl. It uses Godot 4.7 from `$GODOT` or your PATH if you have it. Otherwise it downloads the official Godot 4.7.2 once into your cache folder (`~/.cache/one-gun-one-bullet`, or `%LOCALAPPDATA%\one-gun-one-bullet` on Windows) and keeps Godot's settings there too. Export templates are read straight out of Godot's 1.3 GB all-platform bundle with HTTP range requests, so only the ~35-40 MB per platform you build for is downloaded. A first build takes about 30 seconds (tested on a bare Rocky Linux 8).
 
 To change the builder, edit `tools/builder/main.go` and rebuild the binaries with Go 1.21 or newer:
 
@@ -120,7 +120,7 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - `scripts/`: GDScript files
 - `shaders/`: comic post-process, floor and pulse-ring shaders
 - `tests/`: headless logic tests
-- `build.sh`, `build.bat`: one-command builds for Linux and Windows
+- `tools/build.sh`, `build.bat`: one-command builds for Linux and Windows
 - `tools/builder/`, `tools/bin/`: the Go build tool and its prebuilt static binaries
 - `assets/fonts/`: Anton (SIL Open Font License, see `OFL-Anton.txt`), bundled so no system fonts are needed
 - `export_presets.cfg`: Linux and Windows export presets (single file, game embedded)

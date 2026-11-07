@@ -1,8 +1,8 @@
 #!/bin/sh
-# Build the game for this OS:   ./build.sh
-# Or choose:                    ./build.sh -target windows   (linux, windows, all)
+# Build the game for this OS:   tools/build.sh
+# Or choose:                    tools/build.sh -target windows   (linux, windows, all)
 # Runs a prebuilt, dependency-free builder from tools/bin (source: tools/builder).
-cd "$(dirname "$0")" || exit 1
+cd "$(dirname "$0")/.." || exit 1  # project root
 case "$(uname -m)" in
 	x86_64 | amd64) arch=amd64 ;;
 	aarch64 | arm64) arch=arm64 ;;
