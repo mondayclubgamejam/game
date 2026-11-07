@@ -142,7 +142,7 @@ func _build_room() -> void:
 	partner = Player.new()
 	partner.setup(2, 1 - role, false)
 	round_root.add_child(partner)
-	partner.place(RoomGen.cell_center(room.spawn_b) + Vector3(0, 0.05, 0), PI)
+	partner.place(RoomGen.cell_center(room.spawns[1]) + Vector3(0, 0.05, 0), PI)
 	partner.process_mode = Node.PROCESS_MODE_DISABLED
 
 	for i in room.enemy_cells.size():
@@ -157,14 +157,14 @@ func _build_room() -> void:
 
 	gun = Gun.new()
 	round_root.add_child(gun)
-	gun.global_position = RoomGen.cell_center(room.spawn_a) + Vector3(0, 0.15, -2.0)
+	gun.global_position = RoomGen.cell_center(room.spawns[0]) + Vector3(0, 0.15, -2.0)
 	gun.state = Gun.GROUND
 	gun._refresh_visual()
 	gun.process_mode = Node.PROCESS_MODE_DISABLED
 
 
 func _go_to_spawn() -> void:
-	cam.position = RoomGen.cell_center(room.spawn_a) + Vector3(0, EYE, 0)
+	cam.position = RoomGen.cell_center(room.spawns[0]) + Vector3(0, EYE, 0)
 	_yaw = PI
 	_pitch = 0.0
 	cam.rotation = Vector3(_pitch, _yaw, 0)
@@ -258,7 +258,7 @@ func _process(delta: float) -> void:
 		cam.position += (cam.global_basis * dir.normalized() + Vector3.UP * up) * speed * delta
 
 	for e in enemies:
-		e.animate_walk(2.5 if walking else 0.0, delta)
+		e._rig.animate(delta, 2.5 if walking else 0.0, null)
 
 	var s := move_toward(hud.slowmo, 1.0 if slowmo else 0.0, delta * 3.0)
 	hud.slowmo = s

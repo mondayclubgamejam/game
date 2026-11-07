@@ -439,6 +439,35 @@ func _pose_knives(p: Dictionary) -> void:
 			p["shin_l"] = Vector3(-0.3, 0, 0)
 
 
+## Death: a white flash, knocked back and toppling away from the shot, then
+## shrinking out of sight; the enemy is hidden at the end.
+func fall(hit_dir: Vector3) -> void:
+	var flat := Vector3(hit_dir.x, 0, hit_dir.z)
+	if flat.length() < 0.01:
+		flat = global_basis.z
+	flat = flat.normalized()
+	set_tint(Palette.toon(Color.WHITE))
+	_flash_t = 0.0
+	if _trail != null:
+		_trail.visible = false
+	var owner_enemy := get_parent()
+	# Tip over around the feet, about the axis across the shot.
+	var axis := Vector3.UP.cross(flat).normalized()
+	var start := global_transform
+	var tw := create_tween()
+	tw.set_process_mode(Tween.TWEEN_PROCESS_PHYSICS)
+	tw.tween_method(func(t: float):
+		var tip := Basis(axis, t * PI * 0.48)
+		global_transform = Transform3D(tip * start.basis, start.origin + flat * t * 0.9 + Vector3.UP * sin(t * PI) * 0.25)
+		, 0.0, 1.0, 0.32).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_callback(func(): set_tint(null))
+	tw.tween_property(self, "scale", Vector3.ONE * 0.01, 0.35).set_delay(0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+	tw.tween_callback(func():
+		if is_instance_valid(owner_enemy):
+			owner_enemy.visible = false
+		visible = false)
+
+
 # --- Effects ------------------------------------------------------------------------
 
 func _build_flash() -> void:

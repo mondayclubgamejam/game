@@ -1548,7 +1548,7 @@ func enemy_killed(id: int, dir: Vector3) -> void:
 	if id < 0 or id >= enemies.size() or not enemies[id].alive:
 		return
 	var e: Node3D = enemies[id]
-	e.die()
+	e.die(dir)
 	debris.burst(e.global_position, dir)
 	fx.punch()
 	_enemies_left -= 1

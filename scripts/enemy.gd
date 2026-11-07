@@ -197,14 +197,22 @@ func set_active(on: bool) -> void:
 		_cooldown = maxf(_cooldown, SPAWN_GRACE)
 
 
-func die() -> void:
+## `hit_dir`: which way the killing bullet travelled (zero: just vanish,
+## e.g. a tutorial target that was beaten before a restart).
+func die(hit_dir := Vector3.ZERO) -> void:
 	if not alive:
 		return
 	alive = false
 	collision_layer = 0
-	visible = false
 	set_physics_process(false)
 	set_process(false)
+	if _aim_line != null:
+		_aim_line.visible = false
+	if hit_dir == Vector3.ZERO or _rig == null:
+		visible = false
+		return
+	# The body is knocked over away from the shot, then shrinks away.
+	_rig.fall(hit_dir)
 
 
 func alert() -> void:
