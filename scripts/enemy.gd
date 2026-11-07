@@ -1,0 +1,374 @@
+extends CharacterBody3D
+## An enemy. The host runs its brain; clients only smooth toward the packed
+## positions the host streams. Attacks are events: the host announces a
+## wind-up, then a strike, and each player's own machine decides if the
+## strike hit them.
+
+const RoomGen := preload("res://scripts/room_gen.gd")
+const Palette := preload("res://scripts/palette.gd")
+
+const LAYER_ENEMY := 2
+const MASK_WORLD := 1
+const SIGHT := 26.0
+const THINK_EVERY := 0.15
+const REPATH_EVERY := 0.45
+const MELEE_RANGE := 1.6
+const GUN_RANGE := 18.0
+const SPAWN_GRACE := 2.2       ## no attacks right after a (re)start
+const REACTION := 0.45         ## pause after first spotting someone
+
+const SPEEDS := [3.0, 5.0, 4.3]          ## by kind: gunman, knife, fists
+const WINDUPS := [0.6, 0.28, 0.4]
+const COOLDOWNS := [1.9, 0.8, 0.7]
+
+static var _meshes := {}
+
+var id := 0
+var kind := 0
+var game: Node                 ## the main game node (host uses it to announce attacks)
+var astar: AStarGrid2D
+var alive := true
+
+# Host brain.
+var _alerted := false
+var _target: Node3D = null
+var _sees_target := false
+var _think := 0.0
+var _repath := 0.0
+var _path: Array[Vector3] = []
+var _windup := 0.0
+var _cooldown := 0.0
+var _query := PhysicsRayQueryParameters3D.new()
+
+# Client smoothing.
+var _net_pos := Vector3.ZERO
+var _net_yaw := 0.0
+var _net_vel := Vector3.ZERO
+var _net_age := 0.0
+
+# Visuals.
+var _body_mi: MeshInstance3D
+var _head_mi: MeshInstance3D
+var _arm: Node3D
+var _aim_line: MeshInstance3D
+var _aim_target: Node3D = null
+var _flash := 0.0
+
+
+func _ready() -> void:
+	collision_layer = LAYER_ENEMY
+	collision_mask = MASK_WORLD
+	_query.collision_mask = MASK_WORLD
+	_think = id * 0.037  # spread brain work across frames
+	var capsule := CapsuleShape3D.new()
+	capsule.radius = 0.4
+	capsule.height = 2.2
+	var shape := CollisionShape3D.new()
+	shape.shape = capsule
+	shape.position.y = 1.1
+	add_child(shape)
+	_build_visuals()
+	_net_pos = global_position
+	set_process(false)
+	_cooldown = SPAWN_GRACE + id * 0.12
+
+
+func _build_visuals() -> void:
+	_body_mi = _mesh_part("body", Vector3(0, 0.8, 0), Palette.toon(Palette.ENEMY), self)
+	_head_mi = _mesh_part("head", Vector3(0, 1.88, 0), Palette.toon(Palette.ENEMY), self)
+	_mesh_part("visor", Vector3(0, 1.9, -0.22), Palette.toon(Palette.INK), self)
+	_arm = Node3D.new()
+	_arm.position = Vector3(0.42, 1.15, -0.25)
+	add_child(_arm)
+	match kind:
+		RoomGen.Kind.GUNMAN:
+			_mesh_part("pistol", Vector3(0, 0, -0.18), Palette.toon(Palette.STEEL), _arm)
+			_aim_line = MeshInstance3D.new()
+			_aim_line.mesh = _get_mesh("unit")
+			_aim_line.material_override = Palette.glow(Palette.DANGER, 3.0)
+			_aim_line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_aim_line.top_level = true
+			_aim_line.visible = false
+			add_child(_aim_line)
+		RoomGen.Kind.KNIFE:
+			_mesh_part("blade", Vector3(0, 0.05, -0.3), Palette.toon(Palette.BLADE), _arm)
+		RoomGen.Kind.FISTS:
+			_mesh_part("fist", Vector3(0, 0, -0.1), Palette.toon(Palette.INK), _arm)
+			var other := _mesh_part("fist", Vector3(-0.84, 0, -0.1), Palette.toon(Palette.INK), _arm)
+			other.name = "OtherFist"
+
+
+func _mesh_part(key: String, pos: Vector3, mat: Material, parent: Node3D) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = _get_mesh(key)
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
+
+
+## Meshes are shared by every enemy.
+static func _get_mesh(key: String) -> Mesh:
+	if _meshes.has(key):
+		return _meshes[key]
+	var m: Mesh
+	match key:
+		"body":
+			var c := CapsuleMesh.new()
+			c.radius = 0.4
+			c.height = 1.6
+			c.radial_segments = 16
+			c.rings = 4
+			m = c
+		"head":
+			var s := SphereMesh.new()
+			s.radius = 0.28
+			s.height = 0.56
+			s.radial_segments = 16
+			s.rings = 8
+			m = s
+		"visor":
+			var b := BoxMesh.new()
+			b.size = Vector3(0.46, 0.11, 0.12)
+			m = b
+		"pistol":
+			var b := BoxMesh.new()
+			b.size = Vector3(0.1, 0.16, 0.42)
+			m = b
+		"blade":
+			var b := BoxMesh.new()
+			b.size = Vector3(0.04, 0.09, 0.6)
+			m = b
+		"fist":
+			var s := SphereMesh.new()
+			s.radius = 0.15
+			s.height = 0.3
+			s.radial_segments = 10
+			s.rings = 5
+			m = s
+		_:
+			var b := BoxMesh.new()
+			b.size = Vector3.ONE
+			m = b
+	_meshes[key] = m
+	return m
+
+
+func set_targeted(on: bool) -> void:
+	if alive:
+		var mat := Palette.toon(Palette.TARGET if on else Palette.ENEMY)
+		_body_mi.material_override = mat
+		_head_mi.material_override = mat
+
+
+func die() -> void:
+	if not alive:
+		return
+	alive = false
+	collision_layer = 0
+	visible = false
+	set_physics_process(false)
+	set_process(false)
+
+
+func alert() -> void:
+	_alerted = true
+
+
+func muzzle_pos() -> Vector3:
+	return _arm.global_position + -global_basis.z * 0.4
+
+
+# --- Network smoothing (clients) ----------------------------------------------
+
+func apply_net_state(x: float, z: float, yaw: float) -> void:
+	var p := Vector3(x, global_position.y, z)
+	if _net_age > 0.0:
+		_net_vel = _net_vel.lerp((p - _net_pos) / maxf(_net_age, 0.01), 0.5)
+	_net_pos = p
+	_net_yaw = yaw
+	_net_age = 0.0
+
+
+func _process(delta: float) -> void:
+	# Telegraph visuals run on every peer.
+	if _flash > 0.0:
+		_flash = maxf(_flash - delta, 0.0)
+		_arm.rotation.x = lerpf(0.0, -1.2, minf(_flash * 4.0, 1.0)) if kind != RoomGen.Kind.GUNMAN else 0.0
+	if _aim_line != null and _aim_line.visible:
+		if _aim_target == null or not is_instance_valid(_aim_target) or _flash <= 0.0:
+			_aim_line.visible = false
+		else:
+			_draw_line(muzzle_pos(), _aim_target.chest_pos())
+	if _flash <= 0.0 and (_aim_line == null or not _aim_line.visible):
+		set_process(false)
+
+
+## Wind-up telegraph. `target` may be null.
+func show_windup(target: Node3D, seconds: float) -> void:
+	_flash = seconds
+	var mat := Palette.toon(Color.WHITE)
+	_body_mi.material_override = mat
+	_head_mi.material_override = mat
+	if _aim_line != null and target != null:
+		_aim_target = target
+		_aim_line.visible = true
+	set_process(true)
+
+
+func show_strike() -> void:
+	_flash = 0.0
+	_arm.rotation.x = 0.0
+	if _aim_line:
+		_aim_line.visible = false
+	set_targeted(false)
+
+
+func _draw_line(a: Vector3, b: Vector3) -> void:
+	var d := b - a
+	var length := d.length()
+	if length < 0.05:
+		return
+	var up := Vector3.UP if absf(d.y / length) < 0.98 else Vector3.RIGHT
+	_aim_line.global_transform = Transform3D(
+		Basis.looking_at(d, up) * Basis.from_scale(Vector3(0.025, 0.025, length)), (a + b) * 0.5)
+
+
+# --- Brain (host) ---------------------------------------------------------------
+
+func _physics_process(delta: float) -> void:
+	if not alive:
+		return
+	if not multiplayer.is_server():
+		_net_age += delta
+		var predicted := _net_pos + _net_vel * minf(_net_age, 0.15)
+		var k := 1.0 - exp(-delta * 14.0)
+		global_position = global_position.lerp(predicted, k)
+		rotation.y = lerp_angle(rotation.y, _net_yaw, k)
+		return
+	_brain(delta)
+
+
+func _brain(delta: float) -> void:
+	_cooldown = maxf(_cooldown - delta, 0.0)
+	_think -= delta
+	if _think <= 0.0:
+		_think = THINK_EVERY
+		_perceive()
+
+	var wish := Vector3.ZERO
+	if _windup > 0.0:
+		_windup -= delta
+		_face(_target.global_position if _target else global_position - global_basis.z)
+		if _windup <= 0.0:
+			_strike()
+	elif _target != null and _alerted:
+		var to_target := _target.global_position - global_position
+		to_target.y = 0.0
+		var dist := to_target.length()
+		var wants_attack := false
+		if kind == RoomGen.Kind.GUNMAN:
+			wants_attack = _sees_target and dist < GUN_RANGE
+		else:
+			wants_attack = _sees_target and dist < MELEE_RANGE
+		if wants_attack and _cooldown <= 0.0:
+			_windup = WINDUPS[kind]
+			game.announce_windup(self, _target, _windup)
+		elif kind == RoomGen.Kind.GUNMAN and _sees_target and dist < GUN_RANGE * 0.6:
+			_face(_target.global_position)  # good spot: hold and keep aiming
+		else:
+			wish = _steer(delta, dist)
+	wish += _separation()
+	velocity.x = wish.x
+	velocity.z = wish.z
+	velocity.y = 0.0
+	move_and_slide()
+
+
+func _perceive() -> void:
+	var best: Node3D = null
+	var best_d := INF
+	var best_seen := false
+	for p in game.living_players():
+		var d: float = global_position.distance_to(p.global_position)
+		var seen := d < SIGHT and _line_of_sight(p.chest_pos())
+		if seen:
+			_alerted = true
+		# Prefer players we can see, then the closest.
+		if (seen and not best_seen) or (seen == best_seen and d < best_d):
+			best = p
+			best_d = d
+			best_seen = seen
+	if best_seen and not _sees_target:
+		_cooldown = maxf(_cooldown, REACTION)
+	_target = best
+	_sees_target = best_seen
+
+
+func _line_of_sight(to: Vector3) -> bool:
+	_query.from = global_position + Vector3(0, 1.7, 0)
+	_query.to = to
+	return get_world_3d().direct_space_state.intersect_ray(_query).is_empty()
+
+
+func _steer(delta: float, dist: float) -> Vector3:
+	var speed: float = SPEEDS[kind]
+	var goal: Vector3 = _target.global_position
+	if not _sees_target:
+		_repath -= delta
+		if _repath <= 0.0 or _path.is_empty():
+			_repath = REPATH_EVERY
+			_rebuild_path()
+		while not _path.is_empty() and Vector2(_path[0].x - global_position.x, _path[0].z - global_position.z).length() < 0.5:
+			_path.pop_front()
+		if not _path.is_empty():
+			goal = _path[0]
+	var d := goal - global_position
+	d.y = 0.0
+	if d.length() < 0.05 or dist < MELEE_RANGE * 0.7:
+		return Vector3.ZERO
+	_face(global_position + d)
+	return d.normalized() * speed
+
+
+func _rebuild_path() -> void:
+	_path.clear()
+	var from := RoomGen.world_to_cell(global_position)
+	var to := RoomGen.world_to_cell(_target.global_position)
+	if not astar.is_in_boundsv(from) or not astar.is_in_boundsv(to):
+		return
+	var cells := astar.get_id_path(from, to, true)
+	for i in range(1, cells.size()):
+		_path.append(RoomGen.cell_center(cells[i]))
+
+
+func _separation() -> Vector3:
+	var push := Vector3.ZERO
+	for e in game.enemies:
+		if e == self or not e.alive:
+			continue
+		var d: Vector3 = global_position - e.global_position
+		d.y = 0.0
+		var l := d.length()
+		if l < 1.0 and l > 0.001:
+			push += d / l * (1.0 - l) * 4.0
+	return push
+
+
+func _face(point: Vector3) -> void:
+	var d := point - global_position
+	if Vector2(d.x, d.z).length() > 0.01:
+		rotation.y = atan2(-d.x, -d.z)
+
+
+func _strike() -> void:
+	_cooldown = COOLDOWNS[kind] + randf() * 0.6
+	if _target == null:
+		return
+	if kind == RoomGen.Kind.GUNMAN:
+		var origin := muzzle_pos()
+		var aim: Vector3 = (_target.chest_pos() - origin).normalized()
+		aim = (aim + Vector3(randf_range(-1, 1), randf_range(-0.5, 0.5), randf_range(-1, 1)) * 0.025).normalized()
+		game.announce_strike(self, origin, aim)
+	else:
+		game.announce_strike(self, Vector3.ZERO, Vector3.ZERO)
