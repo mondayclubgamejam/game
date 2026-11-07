@@ -25,35 +25,31 @@ Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs
 
 Two windows on one machine work too: they find each other the same way.
 
-**Firewall:** the game uses UDP **7777** (game) and **7778** (finding games on the LAN). If a firewall is on (for example `ufw` on Ubuntu), allow them on both machines:
+**Firewall:** the game uses UDP **7777** (game) and **7778** (finding games on the LAN). On Windows, allow the game when the firewall asks. On Linux with a firewall on (for example `ufw` on Ubuntu), allow the ports on both machines:
 
 ```sh
 sudo ufw allow 7777:7778/udp
 ```
 
-## Building a Linux executable
+## Building an executable (Linux or Windows)
 
-```sh
-tools/build_linux.sh
-```
-
-This produces **`build/linux/OneGunOneBullet.x86_64`**, a single self-contained file (about 70 MB) with the game packed inside. **Running it needs nothing else, not even Godot**: copy it over, `chmod +x` it if needed, and run it.
-
-Building only needs `python3`. The script uses Godot 4.7 from `$GODOT` or your PATH if you have it; otherwise it downloads the official Godot 4.7.2 into `~/.cache/one-gun-one-bullet` once. It also installs Godot's Linux export template: the official download is a 1.3 GB bundle for every platform, so `tools/fetch_linux_template.py` reads it remotely and pulls out just the Linux files (about 35 MB). A first build from a fresh clone takes about 30 seconds.
-
-### Controls
-
-| Input | Action |
+| On | Run |
 |---|---|
-| WASD / arrows | Move |
-| Mouse | Look and aim |
-| Left click / F | Fire (A) or recall (B) |
-| Right click / Q | Throw the gun (aims itself at your partner when they're near the crosshair) |
-| Walk into the gun | Catch it in the air or pick it up off the floor |
-| R | Restart the room |
-| Esc | Free the mouse |
+| Linux | `./build.sh` |
+| Windows | double-click `build.bat` (or run it from a terminal) |
 
-The aim line shows where the shot or recall will go: orange for a shot, blue for a recall, **red** when it's blocked by a wall or would hit your partner. Enemies on the path light up yellow.
+The build works out which OS you're on and builds for it:
+
+| Output | Runs on |
+|---|---|
+| `build/linux/OneGunOneBullet.x86_64` | 64-bit Linux |
+| `build/windows/OneGunOneBullet.exe` | 64-bit Windows |
+
+Each is a **single self-contained file** with the game packed inside (about 75 MB on Linux, 110 MB on Windows). **Running it needs nothing else, not even Godot**: copy it over and run it (on Linux, `chmod +x` it first if needed). To build for the other OS too, pass `--target windows`, `--target linux` or `--target all`. Godot can cross-build either one from either OS.
+
+Building only needs **Python 3** ([python.org](https://www.python.org/downloads/) on Windows). The build uses Godot 4.7 from `$GODOT` or your PATH if you have it. Otherwise it downloads the official Godot 4.7.2 once into a cache folder (`~/.cache/one-gun-one-bullet`, or `%LOCALAPPDATA%\one-gun-one-bullet` on Windows) and keeps its settings there too. Export templates come out of Godot's 1.3 GB all-platform bundle via HTTP range requests, so only the ~35 MB you need is downloaded. A first build from a fresh clone takes about 30 seconds.
+
+On Windows, the first time you host, Windows Defender Firewall asks whether to allow the game on the network. Allow it on **private networks**, or the other player can't find or join you.
 
 ## Command-line options
 
@@ -102,7 +98,7 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - `scripts/`: GDScript files
 - `shaders/`: comic post-process, floor and pulse-ring shaders
 - `tests/`: headless logic tests
-- `tools/`: Linux build script and export template fetcher
-- `export_presets.cfg`: the Linux export preset (single file, game embedded)
+- `build.sh`, `build.bat`, `tools/build.py`: one-command builds for Linux and Windows
+- `export_presets.cfg`: Linux and Windows export presets (single file, game embedded)
 - `game-style/`: style brief and reference screenshots (ignored by Godot)
 - `assets/`: art, audio, fonts

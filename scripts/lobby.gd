@@ -35,7 +35,8 @@ func _ready() -> void:
 	box.add_child(_label("HOST PLAYS FORWARD (FIRE)  ·  JOINER PLAYS REVERSE (RECALL)", 14, Color.WHITE))
 
 	box.add_child(_label("YOUR NAME", 14, Palette.MUTED.lightened(0.4)))
-	_name = _field(OS.get_environment("USER").to_upper().left(16), "Your name")
+	var login := OS.get_environment("USERNAME") if OS.has_feature("windows") else OS.get_environment("USER")
+	_name = _field(login.to_upper().left(16), "Your name")
 	box.add_child(_name)
 
 	# Games found on the local network.
