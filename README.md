@@ -11,6 +11,8 @@ The host picks who's normal and who's inverted in the match lobby.
 
 So you must **throw the gun to each other** after every shot and every recall. Carrying the gun slows you down. Friendly fire is on, and enemies die in one hit and so do you. **A player who dies watches a teammate** (click for the next one); the attempt only ends when everyone is down, and then the room restarts. Clear every enemy to get a new procedurally generated room. **Bigger groups get bigger rooms and more enemies** (4 more per player beyond two).
 
+**ENDLESS** is one run with no retries. Every room cleared leads straight into the next, and each one is harder: about 2 more enemies, a slightly bigger share of gunmen, and enemies that move and attack 5% faster. All three are capped, so rooms never jam: at most 14 extra enemies, and at most 1.5× speed, reached at room 11. When everyone is down it's **RUN OVER**, and the team goes back to the match lobby. Your best room is saved on your computer for each team size (2, 3 or 4 players). It is shown on the ENDLESS tile and in game as **ROOM 7 · BEST 9**. **R** starts a fresh run.
+
 Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md). Visual style: [`game-style/STYLE_BRIEF.md`](game-style/STYLE_BRIEF.md).
 
 ## Getting started
@@ -49,7 +51,7 @@ The aim line shows where the shot or recall will go: orange for a shot, blue for
 - **Optional: time slows down while everyone stands still** (the host turns it on in the match lobby). Everything slows: players, enemies, bullets, enemy shots and thrown guns. A **TIME SLOWS** cut-in, a **TIME SLOWED** banner and a cool grey screen make it obvious. Pressing any movement key speeds time back up over a quarter of a second. Use it to plan a shot, line up a recall, or watch an enemy bullet coming.
 - **Enemies come in three kinds**, told apart by silhouette and colour (weapon and belt): **gunmen** (red, pistol; shoot from range, then take a while to reload), **swordsmen** (steel, long sword) and **brawlers** (lime, big fists). An enemy flashes white while it winds up an attack.
 - **Crates** are waist-high cover: crouch behind them, jump on them, and note that bullets stick in them like walls.
-- The **ATTEMPT** counter under TARGETS counts your tries at the current room; it resets when you clear it.
+- The **ATTEMPT** counter under TARGETS counts your tries at the current room; it resets when you clear it. In Endless it shows the room and your best instead.
 
 ### Playing online (eduroam, managed machines)
 
@@ -57,9 +59,9 @@ Put the server's **IP address** in **SERVER** and click **PLAY ONLINE**. Everyon
 
 ### The match lobby
 
-Up to **4 players** meet in the **match lobby**, which has two columns: **NORMAL · FIRE** and **INVERTED · RECALL**. Newcomers join the smaller column; anyone can switch with **JOIN NORMAL** / **JOIN INVERTED**, and **the host can click any player to move them**. The game can't start until there's **at least one player in each column** and everyone has clicked **READY UP** (click **CANCEL** to un-ready). The host is shown at the top right. On the left is the **map grid**, which only the host can change: **RANDOM** (a new procedural room every time) is the one to play for now; TUTORIAL and ENDLESS are coming, and six more slots are free for future maps. Only the host sees the **match options** (whether time slows while everyone stands still). On the LAN the host is whoever clicked HOST A GAME; online, it's whoever joined the server first. Nobody can join a game that's already running.
+Up to **4 players** meet in the **match lobby**, which has two columns: **NORMAL · FIRE** and **INVERTED · RECALL**. Newcomers join the smaller column; anyone can switch with **JOIN NORMAL** / **JOIN INVERTED**, and **the host can click any player to move them**. The game can't start until there's **at least one player in each column** and everyone has clicked **READY UP** (click **CANCEL** to un-ready); each player's card shows a **tick** when they're ready and a **cross** when they're not. The host is shown at the top right. On the left is the **map grid**, which only the host can change: **RANDOM** (a new procedural room every time) and **ENDLESS** (see above) can be played; TUTORIAL is coming, and six more slots are free for future maps. Only the host sees the **match options** (whether time slows while everyone stands still). On the LAN the host is whoever clicked HOST A GAME; online, it's whoever joined the server first. Nobody can join a game that's already running.
 
-In game, **Esc → CHANGE ROLES** takes everyone back to the match lobby. You return to **the same room**, and the attempt count doesn't go up for the trip (a wipe that just happened still counts). **LEAVE MATCH** goes back to the title screen. If someone leaves mid-game, the rest carry on as long as both roles are still covered (the gun drops where they stood); otherwise everyone goes back to the match lobby. A LAN host whose players all leave goes back to waiting for new ones.
+In game, **Esc → CHANGE ROLES** takes everyone back to the match lobby. You return to **the same room**, and the attempt count doesn't go up for the trip (a wipe that just happened still counts). In Endless the run carries on from the same room; once a run is over it can't be resumed. **LEAVE MATCH** goes back to the title screen. If someone leaves mid-game, the rest carry on as long as both roles are still covered (the gun drops where they stood); otherwise everyone goes back to the match lobby. A LAN host whose players all leave goes back to waiting for new ones.
 
 Everyone must run the same build. If they don't (for example, the server wasn't updated), the game refuses the connection and says which versions it saw.
 
@@ -131,6 +133,7 @@ Pass these after `--`, for example `godot --path . -- --host`:
 | `--bot` | An autopilot plays your role (for testing) and logs events |
 | `--peaceful` | Host or server only: enemies chase but never attack |
 | `--slowmo` | Host or server only: start with slow motion turned on (it's normally chosen in the match lobby) |
+| `--map=random\|endless` | Host or server only: start with this map picked |
 | `--shots=DIR` | With `--bot`: save a screenshot every 0.5 s plus a room overview |
 | `--log` | Print gameplay events |
 | `--no-gl-fallback` | Don't switch to OpenGL on software rendering |

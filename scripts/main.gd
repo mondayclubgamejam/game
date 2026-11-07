@@ -49,6 +49,7 @@ const ENEMY_SYNC_INTERVAL := 0.05
 const PING_INTERVAL := 0.5
 const RESTART_DELAY := 1.6
 const NEXT_ROOM_DELAY := 2.4
+const RUN_OVER_DELAY := 3.0
 const MASK_WORLD := 1
 const MASK_ENEMY := 2
 const MASK_PLAYER := 4
@@ -56,7 +57,7 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Network protocol version. Bump it whenever an RPC's arguments change, so
 ## mismatched builds refuse each other with a clear message instead of
 ## failing on individual RPCs.
-const PROTOCOL := 9
+const PROTOCOL := 10
 const MAX_PLAYERS := 4
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
@@ -110,6 +111,7 @@ var _net_role := "offline"
 var _auto_join_lan := false
 var _slowmo_enabled := false   ## host: chosen in the match lobby (off by default)
 var _map_id := Lobby.DEFAULT_MAP  ## host: chosen in the match lobby
+var _round_mode := Lobby.DEFAULT_MAP  ## the map / mode of the round being played
 var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
 var _party := {}               ## host: match lobby members, peer id -> {name, role, ready}
 var _party_order: Array[int] = []
@@ -240,6 +242,8 @@ func _parse_args() -> void:
 			_peaceful = true
 		elif arg == "--slowmo":
 			_slowmo_enabled = true  # host/server: start with slow motion on
+		elif arg.begins_with("--map=") and Lobby.map_available(arg.substr(6)):
+			_map_id = arg.substr(6)  # host/server: start on this map
 		elif arg == "--bot":
 			_bot_mode = true
 			_log = true
@@ -473,7 +477,7 @@ func _member_left(id: int) -> void:
 		_clear_round()
 		round_id += 1
 		phase = Phase.LOBBY
-		_party_resume = true
+		_party_resume = _can_resume()
 	if _party_order.is_empty():
 		_party_resume = false
 	_update_advertising()
@@ -571,7 +575,9 @@ func _party_broadcast(note: String) -> void:
 		var m: Dictionary = _party[id]
 		members.append([id, m["name"], m["role"], m["ready"]])
 	var info := "NEW GAME"
-	if _party_resume:
+	if _party_resume and _round_mode == "endless":
+		info = "ROOM %d  ·  SAME RUN" % (room_no + (1 if _round_end == "cleared" else 0))
+	elif _party_resume:
 		info = "ROOM %d  ·  ATTEMPT %d  ·  SAME MAP" % [room_no, _resume_attempt()]
 	party_state.rpc(members, info, note, _slowmo_enabled, _party_leader(), _map_id)
 
@@ -676,6 +682,7 @@ func party_set_map(id: String) -> void:
 			or not Lobby.map_available(id) or id == _map_id:
 		return
 	_map_id = id
+	_party_resume = false  # a different map is a new game
 	for m in _party.values():
 		m["ready"] = false
 	_party_broadcast("")
@@ -690,10 +697,16 @@ func request_party() -> void:
 	_clear_round()
 	round_id += 1  # cancels any pending restart
 	phase = Phase.LOBBY
-	_party_resume = true
+	_party_resume = _can_resume()
 	for m in _party.values():
 		m["ready"] = false
 	_party_broadcast("%s wants to change roles." % who)
+
+
+## Going back to the lobby keeps the game going, except after an Endless
+## run has ended: there are no retries.
+func _can_resume() -> bool:
+	return not (_round_mode == "endless" and _round_end == "died")
 
 
 ## The attempt number a resumed game continues with: a death that just
@@ -711,11 +724,11 @@ func _party_start() -> void:
 	# A different number of players means a different room.
 	var same_team_size := team.size() == roster.size()
 	if _party_resume and _round_end != "cleared" and same_team_size:
-		start_round.rpc(room_seed, room_no, _resume_attempt(), team)
+		start_round.rpc(room_seed, room_no, _resume_attempt(), team, _map_id)
 	elif _party_resume:
-		start_round.rpc(_new_seed(), room_no + (1 if _round_end == "cleared" else 0), 1, team)
+		start_round.rpc(_new_seed(), room_no + (1 if _round_end == "cleared" else 0), 1, team, _map_id)
 	else:
-		start_round.rpc(_new_seed(), 1, 1, team)
+		start_round.rpc(_new_seed(), 1, 1, team, _map_id)
 	_party_resume = false
 
 
@@ -854,16 +867,18 @@ func _new_seed() -> int:
 # --- Rounds ------------------------------------------------------------------------
 
 @rpc("authority", "call_local", "reliable")
-## `team`: [peer id, role, name] for every player in this round.
-func start_round(seed_in: int, number: int, try_no: int, team: Array) -> void:
+## `team`: [peer id, role, name] for every player in this round. `mode`: the
+## map picked in the match lobby; Endless gets harder with every room.
+func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: String) -> void:
 	_clear_round()
 	round_id += 1
 	room_seed = seed_in
 	room_no = number
 	attempt = try_no
 	_round_end = ""
+	_round_mode = mode
 	roster = team
-	room = RoomGen.generate(seed_in, team.size())
+	room = RoomGen.generate(seed_in, team.size(), _difficulty(mode, number))
 	astar = RoomBuilder.build_astar(room)
 	round_root = Node3D.new()
 	round_root.name = "Round"
@@ -889,6 +904,7 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array) -> void:
 		var e := Enemy.new()
 		e.id = i
 		e.kind = room.enemy_kinds[i]
+		e.pace = room.pace
 		e.game = self
 		e.astar = astar
 		e.position = RoomGen.cell_center(room.enemy_cells[i])
@@ -931,8 +947,8 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array) -> void:
 	var inverts := []
 	for entry in team:
 		(normals if entry[1] == ROLE_FORWARD else inverts).append(entry[0])
-	_log_event("round %d try %d seed %d: %d players, %d enemies, normal=%s inverted=%s"
-		% [number, try_no, seed_in, team.size(), enemies.size(), normals, inverts])
+	_log_event("round %d try %d seed %d mode %s: %d players, %d enemies, pace %.2f, normal=%s inverted=%s"
+		% [number, try_no, seed_in, mode, team.size(), enemies.size(), room.pace, normals, inverts])
 	if local_player == null:
 		return  # dedicated server: no screen to update
 	lobby.visible = false
@@ -945,9 +961,18 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array) -> void:
 	hand.player = local_player
 	hud.clear_banners()
 	hud.attempt = try_no
+	hud.best = -1
+	if mode == "endless":
+		hud.room_no = number
+		hud.best = Lobby.record_endless(team.size(), number)
 	hud.banner("ROOM %d" % number, Palette.SIGNAL)
 	if not _bot_mode:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## How much harder than usual a room is: Endless ramps up room by room.
+static func _difficulty(mode: String, number: int) -> int:
+	return number - 1 if mode == "endless" else 0
 
 
 func _clear_round() -> void:
@@ -986,7 +1011,7 @@ func room_cleared() -> void:
 	hud.banner("CLEAR!", Palette.ENEMY)
 	_log_event("room cleared")
 	if multiplayer.is_server():
-		_later(NEXT_ROOM_DELAY, func(): start_round.rpc(_new_seed(), room_no + 1, 1, roster))
+		_later(NEXT_ROOM_DELAY, func(): start_round.rpc(_new_seed(), room_no + 1, 1, roster, _round_mode))
 
 
 ## A player died. The attempt goes on until everyone is down; the dead
@@ -1021,10 +1046,33 @@ func _check_all_down() -> void:
 func all_down() -> void:
 	phase = Phase.OVER
 	_round_end = "died"
+	if _round_mode == "endless":
+		# No retries: the run is over and everyone goes back to the match lobby.
+		hud.banner("RUN OVER  ·  ROOM %d" % room_no, Palette.DANGER)
+		_log_event("run over at room %d" % room_no)
+		if multiplayer.is_server():
+			_later(RUN_OVER_DELAY, _end_run)
+		return
 	hud.banner("EVERYONE'S DOWN", Palette.DANGER)
 	_log_event("everyone down")
 	if multiplayer.is_server():
-		_later(RESTART_DELAY, func(): start_round.rpc(room_seed, room_no, attempt + 1, roster))
+		_later(RESTART_DELAY, func(): start_round.rpc(room_seed, room_no, attempt + 1, roster, _round_mode))
+
+
+## Host: an Endless run ended. Everyone back to the match lobby for a new run.
+func _end_run() -> void:
+	var reached := room_no
+	_clear_round()
+	round_id += 1
+	phase = Phase.LOBBY
+	_party_resume = false
+	for m in _party.values():
+		m["ready"] = false
+	_update_advertising()
+	if not _dedicated and _party_order.size() <= 1:
+		_host_show_waiting("Run over at room %d." % reached)
+	else:
+		_party_broadcast("Run over at room %d." % reached)
 
 
 ## Host -> everyone: a player left mid-game and the rest carry on.
@@ -1049,7 +1097,10 @@ func player_left(peer: int) -> void:
 @rpc("any_peer", "call_remote", "reliable")
 func request_restart() -> void:
 	if multiplayer.is_server() and phase != Phase.LOBBY:
-		start_round.rpc(room_seed, room_no, attempt + 1, roster)
+		if _round_mode == "endless":
+			start_round.rpc(_new_seed(), 1, 1, roster, _round_mode)  # a fresh run
+		else:
+			start_round.rpc(room_seed, room_no, attempt + 1, roster, _round_mode)
 
 
 func _local_died(cause: String) -> void:

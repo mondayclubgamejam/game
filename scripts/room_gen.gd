@@ -17,9 +17,18 @@ const MIN_ENEMIES := 8
 const MAX_ENEMIES := 12
 const WALL := 1                ## full-height wall
 const CRATE := 2               ## waist-high crate: hides a crouching player, can be jumped on
+## Endless: each room deeper adds enemies, gunmen and pace, up to these caps.
+const LEVEL_ENEMIES := 2       ## extra enemies per level
+const MAX_EXTRA_ENEMIES := 14
+const LEVEL_GUNMEN := 0.025    ## extra gunman share per level
+const MAX_EXTRA_GUNMEN := 0.2
+const LEVEL_PACE := 0.05       ## enemies move and attack this much faster per level
+const MAX_PACE := 1.5
 
 var seed_value := 0
 var players := 2
+var level := 0                  ## difficulty: 0 normally, Endless room - 1
+var pace := 1.0                 ## enemy speed and attack-rate multiplier
 var cols := 18
 var rows := 14
 var solid := PackedByteArray()  ## cols * rows: 0 floor, WALL or CRATE
@@ -30,11 +39,26 @@ var boxes: Array[Rect2i] = []   ## merged wall rectangles, in cells
 var crates: Array[Vector2i] = []
 
 
-## `player_count` (2-4) makes the room bigger and adds enemies.
-static func generate(seed_in: int, player_count := 2) -> RefCounted:
+## `player_count` (2-4) makes the room bigger and adds enemies; `difficulty`
+## (Endless: room number - 1) adds more, more gunmen and a faster pace.
+static func generate(seed_in: int, player_count := 2, difficulty := 0) -> RefCounted:
 	var room = new()
+	room.level = maxi(difficulty, 0)
+	room.pace = pace_for(room.level)
 	room._build(seed_in, clampi(player_count, 2, MAX_PLAYERS))
 	return room
+
+
+static func pace_for(lvl: int) -> float:
+	return minf(1.0 + LEVEL_PACE * maxi(lvl, 0), MAX_PACE)
+
+
+static func extra_enemies(lvl: int) -> int:
+	return mini(LEVEL_ENEMIES * maxi(lvl, 0), MAX_EXTRA_ENEMIES)
+
+
+static func gunman_share(player_count: int, lvl: int) -> float:
+	return 0.4 + 0.05 * (player_count - 2) + minf(LEVEL_GUNMEN * maxi(lvl, 0), MAX_EXTRA_GUNMEN)
 
 
 ## Average of the spawn cells.
@@ -200,9 +224,10 @@ func _random_piece(rng: RandomNumberGenerator) -> Array[Vector2i]:
 
 
 func _place_enemies(rng: RandomNumberGenerator) -> void:
-	# Four more enemies per player beyond two, with a few more gunmen.
-	var wanted := rng.randi_range(MIN_ENEMIES, MAX_ENEMIES) + 4 * (players - 2)
-	var gunman_share := 0.4 + 0.05 * (players - 2)
+	# Four more enemies per player beyond two, with a few more gunmen; more
+	# still the deeper an Endless run goes. Spacing below keeps it from jamming.
+	var wanted := rng.randi_range(MIN_ENEMIES, MAX_ENEMIES) + 4 * (players - 2) + extra_enemies(level)
+	var share := gunman_share(players, level)
 	var spawn_mid := spawn_center()
 	var candidates: Array[Vector2i] = []
 	for y in rows:
@@ -228,7 +253,7 @@ func _place_enemies(rng: RandomNumberGenerator) -> void:
 			continue
 		enemy_cells.append(c)
 		var roll := rng.randf()
-		var kind := Kind.GUNMAN if roll < gunman_share else (Kind.KNIFE if roll < gunman_share + 0.3 else Kind.FISTS)
+		var kind := Kind.GUNMAN if roll < share else (Kind.KNIFE if roll < share + 0.3 else Kind.FISTS)
 		enemy_kinds.append(kind)
 
 

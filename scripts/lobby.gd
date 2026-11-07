@@ -29,7 +29,7 @@ const MAX_PLAYERS := 4
 const MAPS := [
 	{"id": "tutorial", "name": "TUTORIAL", "sub": "LEARN THE LOOP", "ready": false},
 	{"id": "random", "name": "RANDOM", "sub": "A NEW ROOM EVERY TIME", "ready": true},
-	{"id": "endless", "name": "ENDLESS", "sub": "HOW FAR CAN YOU GET?", "ready": false},
+	{"id": "endless", "name": "ENDLESS", "sub": "HOW FAR CAN YOU GET?", "ready": true},
 	{"id": "", "name": "", "sub": "", "ready": false},
 	{"id": "", "name": "", "sub": "", "ready": false},
 	{"id": "", "name": "", "sub": "", "ready": false},
@@ -38,6 +38,16 @@ const MAPS := [
 	{"id": "", "name": "", "sub": "", "ready": false},
 ]
 const DEFAULT_MAP := "random"
+## The match lobby panel (1280 x 720 layout) and its slant. The map grid
+## fills the same height and its right edge runs parallel to the panel's
+## white left edge.
+const PANEL_LEFT := 720.0
+const PANEL_TOP := 36.0
+const PANEL_BOTTOM := 628.0
+const PANEL_SKEW := 0.08
+const GRID_LEFT := 64.0      ## left edge of the middle row
+const GRID_GAP := 12.0       ## between tiles
+const GRID_MARGIN := 24.0    ## between the grid and the panel
 
 
 static func map_available(id: String) -> bool:
@@ -45,6 +55,26 @@ static func map_available(id: String) -> bool:
 		if m["id"] == id:
 			return m["ready"]
 	return false
+
+
+## Best room reached in Endless with this many players, on this computer.
+static func endless_best(players: int) -> int:
+	var cfg := ConfigFile.new()
+	if cfg.load(SETTINGS) != OK:
+		return 0
+	return int(cfg.get_value("endless", "best_%d" % players, 0))
+
+
+## Remembers `room` as the best Endless room for this many players if it is.
+static func record_endless(players: int, room: int) -> int:
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS)
+	var best := int(cfg.get_value("endless", "best_%d" % players, 0))
+	if room > best:
+		best = room
+		cfg.set_value("endless", "best_%d" % players, best)
+		cfg.save(SETTINGS)
+	return best
 
 var _pages: Array[Control] = []
 var _menu: VBoxContainer
@@ -70,7 +100,6 @@ var _options_heading: Label
 var _leader := 0
 var _title_node: Control
 var _maps_node: Control
-var _map_heading: Label
 var _map_tiles: Array[Button] = []
 var _host_label: Label
 var _ready_button: Button
@@ -161,7 +190,7 @@ func show_party(members: Array, my_id: int, leader: int, info: String, slowmo: b
 	for m in members:
 		if m["id"] == leader:
 			_host_label.text = "HOST  ·  %s" % m["name"]
-	_show_maps(map_id, is_host)
+	_show_maps(map_id, is_host, members.size())
 	var my_role := -1
 	var counts := [0, 0]
 	for m in members:
@@ -200,8 +229,9 @@ func show_party(members: Array, my_id: int, leader: int, info: String, slowmo: b
 	_set_message(note, false)
 
 
-## A player in a column: "NAME (YOU)", then READY / NOT READY underneath.
-## For the host, other players' cards are buttons that move them across.
+## A player in a column: "NAME (YOU)" with a tick (ready) or a cross (not
+## ready) on the right. For the host, other players' cards are buttons that
+## move them across.
 func _player_card(m: Dictionary, my_id: int, is_host: bool) -> Button:
 	var role: int = m["role"]
 	var b := Button.new()
@@ -211,25 +241,53 @@ func _player_card(m: Dictionary, my_id: int, is_host: bool) -> Button:
 	for state in ["normal", "disabled", "pressed"]:
 		b.add_theme_stylebox_override(state, style)
 	b.add_theme_stylebox_override("hover", _slanted(Palette.role_color(role).lightened(0.2), 4))
-	var box := VBoxContainer.new()
-	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	box.offset_left = 22
-	box.offset_top = 2
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	box.add_theme_constant_override("separation", -6)
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var name_label := _label(str(m["name"]) + ("  (YOU)" if m["id"] == my_id else ""), 20, Color.WHITE, 5, Vector2.ZERO)
 	name_label.clip_text = true
-	box.add_child(name_label)
-	box.add_child(_label("READY" if m["ready"] else "NOT READY", 13,
-		READY_COLOR.darkened(0.45) if m["ready"] else Palette.INK, 0, Vector2.ZERO))
-	b.add_child(box)
+	name_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	name_label.offset_left = 22
+	name_label.offset_right = -50
+	name_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	b.add_child(name_label)
+	var mark := ReadyMark.new()
+	mark.is_ready = m["ready"]
+	mark.anchor_left = 1.0
+	mark.anchor_right = 1.0
+	mark.anchor_top = 0.5
+	mark.anchor_bottom = 0.5
+	mark.offset_left = -50
+	mark.offset_right = -14
+	mark.offset_top = -18
+	mark.offset_bottom = 18
+	b.add_child(mark)
 	var movable: bool = is_host and m["id"] != my_id
 	b.disabled = not movable
 	if movable:
 		var id: int = m["id"]
 		b.pressed.connect(func(): move_requested.emit(id, 1 - role))
 	return b
+
+
+## An ink badge with a green tick (ready) or a red cross (not ready).
+class ReadyMark extends Control:
+	const Pal := preload("res://scripts/palette.gd")
+	const TICK := Color("9bff3a")
+	var is_ready := false
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		var c := size * 0.5
+		var r := minf(size.x, size.y) * 0.5
+		draw_circle(c, r, Pal.INK)
+		var u := r / 18.0
+		if is_ready:
+			var pts := PackedVector2Array([c + Vector2(-9, 0) * u, c + Vector2(-3, 7) * u, c + Vector2(10, -8) * u])
+			draw_polyline(pts, TICK, 5.5 * u, true)
+		else:
+			var col := Pal.DANGER.lightened(0.15)
+			draw_line(c + Vector2(-7, -7) * u, c + Vector2(7, 7) * u, col, 5.5 * u, true)
+			draw_line(c + Vector2(7, -7) * u, c + Vector2(-7, 7) * u, col, 5.5 * u, true)
 
 
 func is_in_party() -> bool:
@@ -274,24 +332,27 @@ func _build_title() -> void:
 	title.add_child(_label("INVERTED  ·  RECALL", 26, Palette.REVERSE, 7, Vector2(240, 344)))
 
 
-## The 3 x 3 map grid shown on the left of the match lobby.
+## The 3 x 3 map grid on the left of the match lobby. It is as tall as the
+## lobby panel; the tiles share the panel's slant and each row is shifted
+## along it, so the grid's right edge runs parallel to the panel's white edge.
 func _build_maps() -> void:
 	_maps_node = Control.new()
-	_maps_node.position = Vector2(46, 44)
+	_maps_node.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_maps_node.visible = false
 	add_child(_maps_node)
-	_map_heading = _label("MAP", 34, Palette.SIGNAL, 8, Vector2(8, 0))
-	_maps_node.add_child(_map_heading)
-	var grid := GridContainer.new()
-	grid.columns = 3
-	grid.position = Vector2(0, 58)
-	grid.add_theme_constant_override("h_separation", 12)
-	grid.add_theme_constant_override("v_separation", 12)
-	_maps_node.add_child(grid)
+	var mid_y := (PANEL_TOP + PANEL_BOTTOM) * 0.5
+	var right := PANEL_LEFT - GRID_MARGIN
+	var tile := Vector2((right - GRID_LEFT - 2.0 * GRID_GAP) / 3.0,
+		(PANEL_BOTTOM - PANEL_TOP - 2.0 * GRID_GAP) / 3.0)
 	for i in MAPS.size():
 		var m: Dictionary = MAPS[i]
+		var row := i / 3
+		var col := i % 3
+		var y := PANEL_TOP + row * (tile.y + GRID_GAP)
+		var shift := PANEL_SKEW * (mid_y - (y + tile.y * 0.5))
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(196, 150)
+		b.position = Vector2(GRID_LEFT + col * (tile.x + GRID_GAP) + shift, y)
+		b.size = tile
 		b.focus_mode = Control.FOCUS_NONE
 		var box := VBoxContainer.new()
 		box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -307,36 +368,39 @@ func _build_maps() -> void:
 		b.add_child(box)
 		var id: String = m["id"]
 		b.pressed.connect(func(): map_chosen.emit(id))
-		grid.add_child(b)
+		_maps_node.add_child(b)
 		_map_tiles.append(b)
 
 
-## Highlights the chosen map; only the host can click ready maps.
-func _show_maps(selected: String, is_host: bool) -> void:
-	_map_heading.text = "MAP" if is_host else "MAP  ·  THE HOST PICKS"
+## Highlights the chosen map; only the host can click ready maps. Endless
+## shows this computer's best room for the current number of players.
+func _show_maps(selected: String, is_host: bool, players: int) -> void:
 	for i in MAPS.size():
 		var m: Dictionary = MAPS[i]
 		var b := _map_tiles[i]
 		var sub: Label = b.get_child(0).get_child(1)
 		var picked: bool = m["id"] == selected and m["id"] != ""
 		var fill: Color
+		sub.text = m["sub"]
+		if m["id"] == "endless":
+			var best := endless_best(clampi(players, 2, MAX_PLAYERS))
+			if best > 0:
+				sub.text += "\nBEST  ·  ROOM %d" % best
 		if picked:
 			fill = Palette.SIGNAL
-			sub.text = "SELECTED  ·  " + m["sub"]
 		elif m["ready"]:
 			fill = Palette.SIGNAL.darkened(0.45)
-			sub.text = m["sub"]
 		elif m["id"] != "":
 			fill = Palette.MUTED.darkened(0.3)
 			sub.text = "COMING SOON"
 		else:
 			fill = Palette.INK.lightened(0.12)
 			sub.text = ""
-		var style := _slanted(fill, 6 if picked else 4, Color.WHITE if picked else Palette.INK)
+		var style := _slanted(fill, 6 if picked else 4, Color.WHITE if picked else Palette.INK, PANEL_SKEW)
 		for state in ["normal", "disabled", "pressed"]:
 			b.add_theme_stylebox_override(state, style)
 		b.add_theme_stylebox_override("hover", _slanted(fill.lightened(0.15), 6 if picked else 4,
-			Color.WHITE if picked else Palette.INK))
+			Color.WHITE if picked else Palette.INK, PANEL_SKEW))
 		b.disabled = not (is_host and m["ready"]) or picked
 
 
@@ -345,15 +409,15 @@ func _build_panel() -> void:
 	panel.anchor_left = 1.0
 	panel.anchor_right = 1.0
 	panel.anchor_bottom = 1.0
-	panel.offset_left = -560
+	panel.offset_left = PANEL_LEFT - 1280.0
 	panel.offset_right = -40
-	panel.offset_top = 36
-	panel.offset_bottom = -92
+	panel.offset_top = PANEL_TOP
+	panel.offset_bottom = PANEL_BOTTOM - 720.0
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(Palette.INK, 0.92)
 	sb.border_color = Color.WHITE
 	sb.border_width_left = 6
-	sb.skew = Vector2(0.08, 0)
+	sb.skew = Vector2(PANEL_SKEW, 0)
 	sb.set_content_margin_all(26)
 	sb.content_margin_left = 44
 	panel.add_theme_stylebox_override("panel", sb)
@@ -646,12 +710,12 @@ func _spacer(h: int) -> Control:
 	return c
 
 
-func _slanted(fill: Color, border := 4, border_color := Palette.INK) -> StyleBoxFlat:
+func _slanted(fill: Color, border := 4, border_color := Palette.INK, skew := 0.22) -> StyleBoxFlat:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = fill
 	sb.border_color = border_color
 	sb.set_border_width_all(border)
-	sb.skew = Vector2(0.22, 0)
+	sb.skew = Vector2(skew, 0)
 	sb.content_margin_left = 26
 	sb.content_margin_right = 20
 	sb.content_margin_top = 6

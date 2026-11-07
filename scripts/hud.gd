@@ -13,6 +13,8 @@ var role := 0
 var can_act := false
 var targets := 0
 var attempt := 1
+var room_no := 1
+var best := -1                   ## Endless: best room reached (-1 outside Endless)
 var ping_ms := -1
 var markers: Array = []          ## [Vector2 pos, Color, String label, bool on_screen]
 var spectating := ""             ## while dead: the teammate being watched
@@ -90,9 +92,11 @@ func _draw() -> void:
 	# Targets, top left.
 	_panel(Vector2(24, 24) * s, Vector2(250, 54) * s, Palette.ENEMY)
 	_text("TARGETS  %d" % targets, Vector2(48, 66) * s, int(34 * s), Color.WHITE, int(8 * s))
-	# Attempt counter, tucked under the targets panel.
-	_panel(Vector2(36, 84) * s, Vector2(170, 34) * s, Palette.INK.lightened(0.18))
-	_text("ATTEMPT  %d" % attempt, Vector2(58, 109) * s, int(20 * s), Palette.SIGNAL, 0)
+	# Attempt counter (Endless: room and best), tucked under the targets panel.
+	var sub := "ATTEMPT  %d" % attempt if best < 0 else "ROOM %d  ·  BEST %d" % [room_no, best]
+	var sub_w := font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, int(20 * s)).x / s
+	_panel(Vector2(36, 84) * s, Vector2(maxf(170.0, sub_w + 56.0), 34) * s, Palette.INK.lightened(0.18))
+	_text(sub, Vector2(58, 109) * s, int(20 * s), Palette.SIGNAL, 0)
 
 	# Role tag, top right, sized to the word.
 	var role_name := "NORMAL" if role == 0 else "INVERTED"

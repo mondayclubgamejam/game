@@ -14,6 +14,7 @@ func _initialize() -> void:
 	test_room_is_deterministic()
 	test_crates_are_placed_sensibly()
 	test_rooms_scale_with_players()
+	test_endless_ramps_up_with_caps()
 	test_rooms_are_connected_and_populated()
 	test_different_seeds_differ()
 	test_merged_boxes_cover_exactly_the_walls()
@@ -178,6 +179,47 @@ func test_crates_are_placed_sensibly() -> void:
 		if _failed > 0:
 			return
 	check(total > 200 * 4, "rooms get a fair number of crates (%d over 200 rooms)" % total)
+
+
+## Endless: deeper rooms have more enemies, more gunmen and a faster pace,
+## all capped, and stay playable (connected, enemies spaced, away from spawn).
+func test_endless_ramps_up_with_caps() -> void:
+	check(RoomGen.pace_for(0) == 1.0 and RoomGen.extra_enemies(0) == 0, "level 0 is the normal room")
+	check(RoomGen.pace_for(40) == RoomGen.MAX_PACE, "pace is capped")
+	check(RoomGen.extra_enemies(40) == RoomGen.MAX_EXTRA_ENEMIES, "extra enemies are capped")
+	check(RoomGen.gunman_share(4, 99) <= 0.75, "gunman share stays below 3 in 4")
+	var plain = RoomGen.generate(4242, 2)
+	var level0 = RoomGen.generate(4242, 2, 0)
+	check(plain.solid == level0.solid and plain.enemy_cells == level0.enemy_cells, "difficulty 0 matches a normal room")
+	for n in [2, 3, 4]:
+		var prev := 0.0
+		var prev_gunmen := 0.0
+		for lvl in [0, 3, 6, 12, 30]:
+			var total := 0
+			var gunmen := 0
+			for seed in 30:
+				var r = RoomGen.generate(seed * 17 + lvl, n, lvl)
+				total += r.enemy_cells.size()
+				for k in r.enemy_kinds:
+					gunmen += 1 if k == RoomGen.Kind.GUNMAN else 0
+				check(r.reachable_count(r.spawns[0]) == r.floor_count(), "%dp level %d connected" % [n, lvl])
+				check(r.pace == RoomGen.pace_for(lvl), "%dp level %d pace set" % [n, lvl])
+				for i in r.enemy_cells.size():
+					var c: Vector2i = r.enemy_cells[i]
+					check(Vector2(c).distance_to(r.spawn_center()) >= RoomGen.MIN_ENEMY_DIST, "%dp level %d enemy away from spawn" % [n, lvl])
+					for j in range(i + 1, r.enemy_cells.size()):
+						var d: Vector2i = r.enemy_cells[j] - c
+						check(absi(d.x) > 1 or absi(d.y) > 1, "%dp level %d enemies not packed" % [n, lvl])
+				if _failed > 0:
+					return
+			var avg := float(total) / 30.0
+			var share := float(gunmen) / maxf(total, 1)
+			print("  endless %dp level %2d: %.1f enemies, %.0f%% gunmen, pace %.2f" % [n, lvl, avg, share * 100.0, RoomGen.pace_for(lvl)])
+			if lvl > 0 and lvl <= 6:
+				check(avg > prev + 3.0, "%dp level %d: more enemies (%.1f vs %.1f)" % [n, lvl, avg, prev])
+				check(share > prev_gunmen - 0.05, "%dp level %d: gunman share holds or grows" % [n, lvl])
+			prev = avg
+			prev_gunmen = share
 
 
 func test_rooms_scale_with_players() -> void:

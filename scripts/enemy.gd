@@ -29,6 +29,7 @@ static var _meshes := {}
 
 var id := 0
 var kind := 0
+var pace := 1.0                ## Endless: deeper rooms move and attack faster
 var game: Node                 ## the main game node (host uses it to announce attacks)
 var astar: AStarGrid2D
 var alive := true
@@ -312,7 +313,7 @@ func _brain(real_delta: float) -> void:
 		else:
 			wants_attack = _sees_target and dist < MELEE_RANGE
 		if wants_attack and _cooldown <= 0.0:
-			_windup = WINDUPS[kind]
+			_windup = WINDUPS[kind] / pace
 			game.announce_windup(self, _target, _windup)
 		elif kind == RoomGen.Kind.GUNMAN and _sees_target and dist < GUN_RANGE * 0.6:
 			_face(_target.global_position)  # good spot: hold and keep aiming
@@ -353,7 +354,7 @@ func _line_of_sight(to: Vector3) -> bool:
 
 
 func _steer(delta: float, dist: float) -> Vector3:
-	var speed: float = SPEEDS[kind]
+	var speed: float = SPEEDS[kind] * pace
 	var goal: Vector3 = _target.global_position
 	if not _sees_target:
 		_repath -= delta
@@ -403,7 +404,7 @@ func _face(point: Vector3) -> void:
 
 
 func _strike() -> void:
-	_cooldown = COOLDOWNS[kind] + randf() * COOLDOWN_JITTER[kind]
+	_cooldown = (COOLDOWNS[kind] + randf() * COOLDOWN_JITTER[kind]) / pace
 	if _target == null:
 		return
 	if kind == RoomGen.Kind.GUNMAN:
