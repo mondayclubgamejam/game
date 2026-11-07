@@ -24,6 +24,7 @@ const Hud := preload("res://scripts/hud.gd")
 const Hand := preload("res://scripts/hand.gd")
 const Lobby := preload("res://scripts/lobby.gd")
 const Bot := preload("res://scripts/bot.gd")
+const LanDiscovery := preload("res://scripts/lan_discovery.gd")
 
 enum Phase { LOBBY, PLAYING, OVER }
 
@@ -68,6 +69,7 @@ var bullet: Bullet
 var tracers: Tracers
 var debris: Debris
 var aim_line: AimLine
+var lan: LanDiscovery
 
 var _claim_pending := false
 var _action_kills := 0
@@ -83,6 +85,7 @@ var _log := false
 var _peaceful := false
 var _bot_mode := false
 var _net_role := "offline"
+var _auto_join_lan := false
 
 
 func _ready() -> void:
@@ -105,6 +108,11 @@ func _ready() -> void:
 	lobby.host_requested.connect(host_game)
 	lobby.join_requested.connect(join_game)
 
+	lan = LanDiscovery.new()
+	add_child(lan)
+	lan.hosts_changed.connect(_on_lan_hosts)
+	_listen_lan()
+
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected)
@@ -120,6 +128,8 @@ func _parse_args() -> void:
 	for arg in OS.get_cmdline_user_args():
 		if arg == "--host":
 			host = true
+		elif arg == "--join=lan":
+			_auto_join_lan = true  # join the first game found on the LAN
 		elif arg.begins_with("--join="):
 			join = arg.trim_prefix("--join=")
 		elif arg.begins_with("--port="):
@@ -157,6 +167,8 @@ func host_game(port: int) -> void:
 		return
 	multiplayer.multiplayer_peer = peer
 	_net_role = "host"
+	lan.stop_listening()
+	lan.start_advertising(port, lobby.player_name())
 	lobby.set_status("Hosting on port %d. Waiting for your partner..." % port, true)
 	_log_event("hosting on port %d" % port)
 
@@ -169,6 +181,8 @@ func join_game(address: String, port: int) -> void:
 		return
 	multiplayer.multiplayer_peer = peer
 	_net_role = "client"
+	_auto_join_lan = false
+	lan.stop_listening()
 	lobby.set_status("Connecting to %s:%d..." % [address, port], true)
 
 
@@ -186,6 +200,21 @@ func _on_connected() -> void:
 func _on_connection_failed() -> void:
 	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
 	lobby.set_status("Could not connect.", false)
+	_listen_lan()
+
+
+func _listen_lan() -> void:
+	if lan.start_listening():
+		lobby.set_lan_hint("SEARCHING...")
+	else:
+		lobby.set_lan_hint("CAN'T SEARCH THE LAN: PORT %d IS BUSY (ANOTHER COPY OPEN?)" % LanDiscovery.PORT)
+
+
+func _on_lan_hosts(hosts: Array) -> void:
+	lobby.set_lan_hosts(hosts)
+	_log_event("LAN games: %s" % [hosts])
+	if _auto_join_lan and not hosts.is_empty() and phase == Phase.LOBBY:
+		join_game(hosts[0]["ip"], hosts[0]["port"])
 
 
 func _on_peer_disconnected(_id: int) -> void:
@@ -208,6 +237,8 @@ func _back_to_lobby(message: String) -> void:
 	hand.visible = false
 	lobby.visible = true
 	lobby.set_status(message, false)
+	lan.stop_advertising()
+	_listen_lan()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
@@ -285,6 +316,8 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 	phase = Phase.PLAYING
 	_update_carry()
 
+	lan.stop_advertising()  # one partner per game
+	lan.stop_listening()
 	lobby.visible = false
 	hud.visible = true
 	hand.visible = true

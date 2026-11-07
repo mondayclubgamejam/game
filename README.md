@@ -19,11 +19,27 @@ Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs
 
 ### Playing together
 
-- One player clicks **HOST (A)**. The lobby lists that machine's IP addresses.
-- The other player types the host's IP and clicks **JOIN (B)**.
-- On the same network this just works. Over the internet, the host forwards UDP port **7777** (or a port you pick in the lobby).
+- One player clicks **HOST (A)**.
+- On the same network, the other player sees **JOIN <NAME>'S GAME** appear under *Games on your network* within a second and clicks it.
+- Otherwise, type the host's IP (shown at the bottom of the host's lobby) and click **JOIN (B)**. Over the internet, the host forwards UDP port **7777**.
 
-Two windows on one machine work too: host in one, join `127.0.0.1` in the other.
+Two windows on one machine work too: they find each other the same way.
+
+**Firewall:** the game uses UDP **7777** (game) and **7778** (finding games on the LAN). If a firewall is on (for example `ufw` on Ubuntu), allow them on both machines:
+
+```sh
+sudo ufw allow 7777:7778/udp
+```
+
+## Building a Linux executable
+
+```sh
+tools/build_linux.sh            # or: GODOT=/path/to/godot tools/build_linux.sh
+```
+
+This produces **`build/linux/OneGunOneBullet.x86_64`**, a single self-contained file (about 70 MB) with the game packed inside. Testers need nothing else: copy it over, `chmod +x` it if needed, and run it.
+
+The first build installs Godot's Linux export template. The official template download is a 1.3 GB bundle for every platform, so `tools/fetch_linux_template.py` reads it remotely and pulls out just the Linux files (about 35 MB downloaded).
 
 ### Controls
 
@@ -46,6 +62,7 @@ Pass these after `--`, for example `godot --path . -- --host`:
 | Flag | Effect |
 |---|---|
 | `--host` / `--join=IP` / `--port=N` | Skip the lobby |
+| `--join=lan` | Join the first game found on the LAN |
 | `--bot` | An autopilot plays your role (for testing) and logs events |
 | `--peaceful` | Host only: enemies chase but never attack |
 | `--shots=DIR` | With `--bot`: save a screenshot every 0.5 s plus a room overview |
@@ -74,6 +91,7 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - `scripts/main.gd`: entry point and the **only network router**. Every RPC lives here, so node paths always match on both machines, and moving to a central server later means changing who runs the host branches in this one file.
 - Latency: each player owns **their own movement** and **the bullet they launch**, and decides **hits on themselves**, so nothing you do waits on the network. Only small events cross the wire. The room is rebuilt from a seed, and straight shots and gun throws are re-simulated locally and fast-forwarded by half the measured ping. State streams use unreliable channels separate from reliable events, and the network is polled right after each physics tick.
 - Memory and compute: the walls are one MultiMesh plus one static body, the floor is one shader-tiled plane, enemy bullets, debris and aim lines are pooled MultiMeshes, meshes and materials are shared, and idle systems switch off their per-frame processing.
+- `scripts/lan_discovery.gd`: LAN discovery. Hosts broadcast a small UDP beacon on port 7778 once a second until a partner joins; the lobby listens and lists them.
 - `scripts/room_gen.gd`: deterministic procedural room (always fully connected, enemies kept away from the spawn).
 - `scripts/bullet.gd`, `gun.gd`, `enemy.gd`, `player.gd`: gameplay objects.
 - `scripts/hud.gd`, `hand.gd`, `lobby.gd`, `world_fx.gd`, `shaders/comic.gdshader`: the comic-print look (ink outlines, halftone, posterize, rewind tint).
@@ -84,5 +102,7 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - `scripts/`: GDScript files
 - `shaders/`: comic post-process, floor and pulse-ring shaders
 - `tests/`: headless logic tests
+- `tools/`: Linux build script and export template fetcher
+- `export_presets.cfg`: the Linux export preset (single file, game embedded)
 - `game-style/`: style brief and reference screenshots (ignored by Godot)
 - `assets/`: art, audio, fonts

@@ -9,8 +9,12 @@ const DEFAULT_PORT := 7777
 
 var _address: LineEdit
 var _port: LineEdit
+var _name: LineEdit
 var _status: Label
+var _lan_list: VBoxContainer
+var _lan_hint: Label
 var _buttons: Array[Button] = []
+var _busy := false
 
 
 func _ready() -> void:
@@ -23,13 +27,26 @@ func _ready() -> void:
 	var box := VBoxContainer.new()
 	box.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	box.custom_minimum_size = Vector2(460, 0)
-	box.position -= Vector2(230, 220)
+	box.position -= Vector2(230, 300)
 	box.add_theme_constant_override("separation", 14)
 	add_child(box)
 
 	box.add_child(_label("ONE GUN  ·  ONE BULLET", 46, Palette.SIGNAL))
 	box.add_child(_label("HOST PLAYS FORWARD (FIRE)  ·  JOINER PLAYS REVERSE (RECALL)", 14, Color.WHITE))
 
+	box.add_child(_label("YOUR NAME", 14, Palette.MUTED.lightened(0.4)))
+	_name = _field(OS.get_environment("USER").to_upper().left(16), "Your name")
+	box.add_child(_name)
+
+	# Games found on the local network.
+	box.add_child(_label("GAMES ON YOUR NETWORK", 18, Palette.SIGNAL))
+	_lan_list = VBoxContainer.new()
+	_lan_list.add_theme_constant_override("separation", 8)
+	box.add_child(_lan_list)
+	_lan_hint = _label("SEARCHING...", 14, Palette.MUTED.lightened(0.4))
+	box.add_child(_lan_hint)
+
+	box.add_child(_label("OR CONNECT BY ADDRESS", 18, Palette.SIGNAL))
 	_address = _field("127.0.0.1", "Host address")
 	box.add_child(_address)
 	_port = _field(str(DEFAULT_PORT), "Port")
@@ -55,8 +72,35 @@ func _ready() -> void:
 
 func set_status(text: String, busy: bool) -> void:
 	_status.text = text
+	_busy = busy
 	for b in _buttons:
 		b.disabled = busy
+	for b in _lan_list.get_children():
+		b.disabled = busy
+
+
+func player_name() -> String:
+	var n := _name.text.strip_edges()
+	return n if n != "" else "PLAYER"
+
+
+## One JOIN button per host found on the LAN.
+func set_lan_hosts(hosts: Array) -> void:
+	for child in _lan_list.get_children():
+		child.queue_free()
+	for h in hosts:
+		var label := "JOIN  %s'S GAME   ·   %s" % [str(h["name"]).to_upper(), h["ip"]]
+		var b := _button(label, Palette.REVERSE, func(): join_requested.emit(h["ip"], h["port"]), false)
+		b.custom_minimum_size.y = 44
+		b.add_theme_font_size_override("font_size", 18)
+		b.disabled = _busy
+		_lan_list.add_child(b)
+	_lan_hint.visible = hosts.is_empty()
+
+
+func set_lan_hint(text: String) -> void:
+	_lan_hint.text = text
+	_lan_hint.visible = true
 
 
 func _port_value() -> int:
@@ -87,7 +131,7 @@ func _field(text: String, placeholder: String) -> LineEdit:
 	return e
 
 
-func _button(text: String, color: Color, on_press: Callable) -> Button:
+func _button(text: String, color: Color, on_press: Callable, track := true) -> Button:
 	var b := Button.new()
 	b.text = text
 	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -102,7 +146,8 @@ func _button(text: String, color: Color, on_press: Callable) -> Button:
 	b.add_theme_color_override("font_outline_color", Palette.INK)
 	b.add_theme_constant_override("outline_size", 6)
 	b.pressed.connect(on_press)
-	_buttons.append(b)
+	if track:
+		_buttons.append(b)
 	return b
 
 
