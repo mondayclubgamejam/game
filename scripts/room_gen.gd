@@ -14,14 +14,17 @@ const SPAWN_ROWS := 3          ## rows 1..3 stay free of cover
 const MIN_ENEMY_DIST := 6.5    ## cells from the spawn point
 const MIN_ENEMIES := 8
 const MAX_ENEMIES := 12
+const WALL := 1                ## full-height wall
+const CRATE := 2               ## waist-high crate: hides a crouching player, can be jumped on
 
 var seed_value := 0
-var solid := PackedByteArray()  ## W * H, 1 = wall
+var solid := PackedByteArray()  ## W * H: 0 floor, WALL or CRATE
 var spawn_a := Vector2i.ZERO
 var spawn_b := Vector2i.ZERO
 var enemy_cells: Array[Vector2i] = []
 var enemy_kinds: PackedByteArray = PackedByteArray()
 var boxes: Array[Rect2i] = []   ## merged wall rectangles, in cells
+var crates: Array[Vector2i] = []
 
 
 static func generate(seed_in: int) -> RefCounted:
@@ -33,7 +36,11 @@ static func generate(seed_in: int) -> RefCounted:
 func is_solid(c: Vector2i) -> bool:
 	if c.x < 0 or c.y < 0 or c.x >= W or c.y >= H:
 		return true
-	return solid[c.y * W + c.x] == 1
+	return solid[c.y * W + c.x] != 0
+
+
+func is_wall(c: Vector2i) -> bool:
+	return solid[c.y * W + c.x] == WALL
 
 
 static func cell_center(c: Vector2i) -> Vector3:
@@ -87,6 +94,7 @@ func _build(seed_in: int) -> void:
 	spawn_b = Vector2i(W / 2 + 1, 1)
 
 	_place_cover(rng)
+	_place_crates(rng)
 	_place_enemies(rng)
 	_merge_boxes()
 
@@ -118,6 +126,36 @@ func _place_cover(rng: RandomNumberGenerator) -> void:
 				_mark(c, 0)
 			continue
 		total_floor -= cells.size()
+		placed += 1
+
+
+## Low crates, singly or in pairs, anywhere off the spawn rows that doesn't
+## cut the room in two.
+func _place_crates(rng: RandomNumberGenerator) -> void:
+	var wanted := rng.randi_range(6, 10)
+	var placed := 0
+	var total_floor := floor_count()
+	for attempt in 120:
+		if placed >= wanted:
+			break
+		var c := Vector2i(rng.randi_range(1, W - 2), rng.randi_range(SPAWN_ROWS + 1, H - 2))
+		var cells: Array[Vector2i] = [c]
+		if rng.randf() < 0.35:
+			cells.append(c + (Vector2i.RIGHT if rng.randf() < 0.5 else Vector2i.DOWN))
+		var ok := true
+		for cell in cells:
+			if cell.x > W - 2 or cell.y > H - 2 or is_solid(cell):
+				ok = false
+		if not ok:
+			continue
+		for cell in cells:
+			_mark(cell, CRATE)
+		if reachable_count(spawn_a) != total_floor - cells.size():
+			for cell in cells:
+				_mark(cell, 0)
+			continue
+		total_floor -= cells.size()
+		crates.append_array(cells)
 		placed += 1
 
 
@@ -177,17 +215,17 @@ func _merge_boxes() -> void:
 	used.resize(W * H)
 	for y in H:
 		for x in W:
-			if solid[y * W + x] == 0 or used[y * W + x] == 1:
+			if solid[y * W + x] != WALL or used[y * W + x] == 1:
 				continue
 			var w := 1
-			while x + w < W and solid[y * W + x + w] == 1 and used[y * W + x + w] == 0:
+			while x + w < W and solid[y * W + x + w] == WALL and used[y * W + x + w] == 0:
 				w += 1
 			var h := 1
 			var grow := true
 			while grow and y + h < H:
 				for i in w:
 					var k := (y + h) * W + x + i
-					if solid[k] == 0 or used[k] == 1:
+					if solid[k] != WALL or used[k] == 1:
 						grow = false
 						break
 				if grow:

@@ -12,6 +12,7 @@ var _passed := 0
 
 func _initialize() -> void:
 	test_room_is_deterministic()
+	test_crates_are_placed_sensibly()
 	test_rooms_are_connected_and_populated()
 	test_different_seeds_differ()
 	test_merged_boxes_cover_exactly_the_walls()
@@ -75,7 +76,11 @@ func test_merged_boxes_cover_exactly_the_walls() -> void:
 					if cover[y * RoomGen.W + x] == 1:
 						overlap = true
 					cover[y * RoomGen.W + x] = 1
-		check(cover == r.solid, "seed %d boxes cover walls exactly" % s)
+		var walls := PackedByteArray()
+		walls.resize(RoomGen.W * RoomGen.H)
+		for i in walls.size():
+			walls[i] = 1 if r.solid[i] == RoomGen.WALL else 0
+		check(cover == walls, "seed %d boxes cover walls exactly" % s)
 		check(not overlap, "seed %d boxes do not overlap" % s)
 		check(r.boxes.size() < 40, "seed %d merged into few boxes (%d)" % [s, r.boxes.size()])
 
@@ -156,3 +161,18 @@ func test_lan_private_ranges_and_sweep() -> void:
 		check(not mine.has(ip), "sweep skips this machine's own address")
 		if _failed > 0:
 			return
+
+
+func test_crates_are_placed_sensibly() -> void:
+	var total := 0
+	for s in 200:
+		var r = RoomGen.generate(s * 31 + 7)
+		total += r.crates.size()
+		for c: Vector2i in r.crates:
+			check(r.solid[c.y * RoomGen.W + c.x] == RoomGen.CRATE, "seed %d crate cell marked as crate" % s)
+			check(c.y > RoomGen.SPAWN_ROWS, "seed %d crate off the spawn rows" % s)
+			check(not r.enemy_cells.has(c), "seed %d no enemy inside a crate" % s)
+		check(r.reachable_count(r.spawn_a) == r.floor_count(), "seed %d still connected with crates" % s)
+		if _failed > 0:
+			return
+	check(total > 200 * 4, "rooms get a fair number of crates (%d over 200 rooms)" % total)

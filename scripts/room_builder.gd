@@ -7,6 +7,8 @@ const Palette := preload("res://scripts/palette.gd")
 const FloorShader := preload("res://shaders/floor.gdshader")
 
 const WALL_H := 3.2
+const CRATE_H := 0.95
+const CRATE_SIZE := 1.7   ## a bit under a tile, so crates read as objects
 const LAYER_WORLD := 1
 const LAYER_GUN_RIM := 16
 
@@ -57,6 +59,40 @@ static func build(room: RefCounted) -> Node3D:
 	walls.multimesh = mm
 	walls.material_override = Palette.toon(Palette.WALL)
 	root.add_child(walls)
+
+	# Crates: one MultiMesh for the boxes and one for their darker lids, so
+	# the top edge reads even in flat toon light.
+	var crate_cells: Array[Vector2i] = room.crates
+	if not crate_cells.is_empty():
+		var boxes_mm := MultiMesh.new()
+		boxes_mm.transform_format = MultiMesh.TRANSFORM_3D
+		boxes_mm.mesh = _get_unit_box()
+		boxes_mm.instance_count = crate_cells.size()
+		var lids_mm := MultiMesh.new()
+		lids_mm.transform_format = MultiMesh.TRANSFORM_3D
+		lids_mm.mesh = _get_unit_box()
+		lids_mm.instance_count = crate_cells.size()
+		var size := Vector3(CRATE_SIZE, CRATE_H, CRATE_SIZE)
+		for i in crate_cells.size():
+			var center := RoomGen.cell_center(crate_cells[i]) + Vector3(0, CRATE_H * 0.5, 0)
+			boxes_mm.set_instance_transform(i, Transform3D(Basis.from_scale(size), center))
+			lids_mm.set_instance_transform(i, Transform3D(
+				Basis.from_scale(Vector3(CRATE_SIZE + 0.08, 0.1, CRATE_SIZE + 0.08)),
+				center + Vector3(0, CRATE_H * 0.5, 0)))
+			var shape := CollisionShape3D.new()
+			var box := BoxShape3D.new()
+			box.size = size
+			shape.shape = box
+			shape.position = center
+			body.add_child(shape)
+		var crates_mi := MultiMeshInstance3D.new()
+		crates_mi.multimesh = boxes_mm
+		crates_mi.material_override = Palette.toon(Palette.CRATE)
+		root.add_child(crates_mi)
+		var lids_mi := MultiMeshInstance3D.new()
+		lids_mi.multimesh = lids_mm
+		lids_mi.material_override = Palette.toon(Palette.CRATE_EDGE)
+		root.add_child(lids_mi)
 	root.add_child(body)
 
 	# Tall invisible rim on top of the outer walls. Only the thrown gun

@@ -6,6 +6,7 @@ extends CharacterBody3D
 
 const RoomGen := preload("res://scripts/room_gen.gd")
 const Palette := preload("res://scripts/palette.gd")
+const Clock := preload("res://scripts/clock.gd")
 
 const LAYER_ENEMY := 2
 const MASK_WORLD := 1
@@ -17,9 +18,12 @@ const GUN_RANGE := 18.0
 const SPAWN_GRACE := 2.2       ## no attacks right after a (re)start
 const REACTION := 0.45         ## pause after first spotting someone
 
-const SPEEDS := [3.0, 5.0, 4.3]          ## by kind: gunman, knife, fists
-const WINDUPS := [0.6, 0.28, 0.4]
-const COOLDOWNS := [1.9, 0.8, 0.7]
+const SPEEDS := [3.0, 5.0, 4.3]          ## by kind: gunman, sword, fists
+const WINDUPS := [0.7, 0.3, 0.4]
+const COOLDOWNS := [3.8, 0.8, 0.7]       ## gunmen reload slowly
+const COOLDOWN_JITTER := [1.4, 0.4, 0.4]
+## Resting arm angle by kind: pistol level, sword raised, fists up.
+const ARM_REST := [0.0, 0.9, 0.25]
 
 static var _meshes := {}
 
@@ -73,16 +77,22 @@ func _ready() -> void:
 	_cooldown = SPAWN_GRACE + id * 0.12
 
 
+## Each kind has its own silhouette and colour so they read at a glance:
+## a held-out pistol, a raised long sword, or big fists, plus a coloured belt.
 func _build_visuals() -> void:
+	var accent: Color = Palette.KIND_COLORS[kind]
 	_body_mi = _mesh_part("body", Vector3(0, 0.8, 0), Palette.toon(Palette.ENEMY), self)
 	_head_mi = _mesh_part("head", Vector3(0, 1.88, 0), Palette.toon(Palette.ENEMY), self)
 	_mesh_part("visor", Vector3(0, 1.9, -0.22), Palette.toon(Palette.INK), self)
+	_mesh_part("belt", Vector3(0, 0.95, 0), Palette.toon(accent), self)
 	_arm = Node3D.new()
 	_arm.position = Vector3(0.42, 1.15, -0.25)
+	_arm.rotation.x = ARM_REST[kind]
 	add_child(_arm)
 	match kind:
 		RoomGen.Kind.GUNMAN:
-			_mesh_part("pistol", Vector3(0, 0, -0.18), Palette.toon(Palette.STEEL), _arm)
+			_mesh_part("pistol", Vector3(0, 0, -0.26), Palette.toon(Palette.STEEL), _arm)
+			_mesh_part("muzzle", Vector3(0, 0.02, -0.56), Palette.toon(accent), _arm)
 			_aim_line = MeshInstance3D.new()
 			_aim_line.mesh = _get_mesh("unit")
 			_aim_line.material_override = Palette.glow(Palette.DANGER, 3.0)
@@ -91,11 +101,12 @@ func _build_visuals() -> void:
 			_aim_line.visible = false
 			add_child(_aim_line)
 		RoomGen.Kind.KNIFE:
-			_mesh_part("blade", Vector3(0, 0.05, -0.3), Palette.toon(Palette.BLADE), _arm)
+			_mesh_part("grip", Vector3(0, 0, 0), Palette.toon(Palette.INK), _arm)
+			_mesh_part("guard", Vector3(0, 0, -0.13), Palette.toon(Palette.STEEL), _arm)
+			_mesh_part("blade", Vector3(0, 0, -0.72), Palette.toon(accent), _arm)
 		RoomGen.Kind.FISTS:
-			_mesh_part("fist", Vector3(0, 0, -0.1), Palette.toon(Palette.INK), _arm)
-			var other := _mesh_part("fist", Vector3(-0.84, 0, -0.1), Palette.toon(Palette.INK), _arm)
-			other.name = "OtherFist"
+			_mesh_part("fist", Vector3(0, 0, -0.18), Palette.toon(accent), _arm)
+			_mesh_part("fist", Vector3(-0.84, 0, -0.18), Palette.toon(accent), _arm)
 
 
 func _mesh_part(key: String, pos: Vector3, mat: Material, parent: Node3D) -> MeshInstance3D:
@@ -133,18 +144,37 @@ static func _get_mesh(key: String) -> Mesh:
 			m = b
 		"pistol":
 			var b := BoxMesh.new()
-			b.size = Vector3(0.1, 0.16, 0.42)
+			b.size = Vector3(0.13, 0.22, 0.56)
+			m = b
+		"muzzle":
+			var b := BoxMesh.new()
+			b.size = Vector3(0.15, 0.15, 0.08)
+			m = b
+		"belt":
+			var c := CylinderMesh.new()
+			c.top_radius = 0.43
+			c.bottom_radius = 0.43
+			c.height = 0.16
+			c.radial_segments = 16
+			m = c
+		"grip":
+			var b := BoxMesh.new()
+			b.size = Vector3(0.07, 0.07, 0.24)
+			m = b
+		"guard":
+			var b := BoxMesh.new()
+			b.size = Vector3(0.38, 0.07, 0.07)
 			m = b
 		"blade":
 			var b := BoxMesh.new()
-			b.size = Vector3(0.04, 0.09, 0.6)
+			b.size = Vector3(0.06, 0.15, 1.1)
 			m = b
 		"fist":
 			var s := SphereMesh.new()
-			s.radius = 0.15
-			s.height = 0.3
-			s.radial_segments = 10
-			s.rings = 5
+			s.radius = 0.21
+			s.height = 0.42
+			s.radial_segments = 12
+			s.rings = 6
 			m = s
 		_:
 			var b := BoxMesh.new()
@@ -171,6 +201,11 @@ func die() -> void:
 	set_process(false)
 
 
+## True during an attack wind-up (the HUD flashes this enemy's tag).
+func winding_up() -> bool:
+	return _flash > 0.0
+
+
 func alert() -> void:
 	_alerted = true
 
@@ -193,8 +228,10 @@ func apply_net_state(x: float, z: float, yaw: float) -> void:
 func _process(delta: float) -> void:
 	# Telegraph visuals run on every peer.
 	if _flash > 0.0:
-		_flash = maxf(_flash - delta, 0.0)
-		_arm.rotation.x = lerpf(0.0, -1.2, minf(_flash * 4.0, 1.0)) if kind != RoomGen.Kind.GUNMAN else 0.0
+		_flash = maxf(_flash - delta * Clock.scale, 0.0)
+		if kind != RoomGen.Kind.GUNMAN:
+			# Wind up: pull the weapon back and up.
+			_arm.rotation.x = ARM_REST[kind] + 0.8 * minf(_flash * 4.0, 1.0)
 	if _aim_line != null and _aim_line.visible:
 		if _aim_target == null or not is_instance_valid(_aim_target) or _flash <= 0.0:
 			_aim_line.visible = false
@@ -218,7 +255,14 @@ func show_windup(target: Node3D, seconds: float) -> void:
 
 func show_strike() -> void:
 	_flash = 0.0
-	_arm.rotation.x = 0.0
+	var rest: float = ARM_REST[kind]
+	if kind != RoomGen.Kind.GUNMAN:
+		# Swing through, then settle back.
+		var tw := create_tween()
+		tw.tween_property(_arm, "rotation:x", rest - 1.5, 0.08)
+		tw.tween_property(_arm, "rotation:x", rest, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	else:
+		_arm.rotation.x = rest
 	if _aim_line:
 		_aim_line.visible = false
 	set_targeted(false)
@@ -249,7 +293,8 @@ func _physics_process(delta: float) -> void:
 	_brain(delta)
 
 
-func _brain(delta: float) -> void:
+func _brain(real_delta: float) -> void:
+	var delta := real_delta * Clock.scale  # slow motion slows the brain too
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_think -= delta
 	if _think <= 0.0:
@@ -279,6 +324,7 @@ func _brain(delta: float) -> void:
 		else:
 			wish = _steer(delta, dist)
 	wish += _separation()
+	wish *= Clock.scale
 	velocity.x = wish.x
 	velocity.z = wish.z
 	velocity.y = 0.0
@@ -362,7 +408,7 @@ func _face(point: Vector3) -> void:
 
 
 func _strike() -> void:
-	_cooldown = COOLDOWNS[kind] + randf() * 0.6
+	_cooldown = COOLDOWNS[kind] + randf() * COOLDOWN_JITTER[kind]
 	if _target == null:
 		return
 	if kind == RoomGen.Kind.GUNMAN:

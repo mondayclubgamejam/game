@@ -63,6 +63,7 @@ func _physics_process(delta: float) -> void:
 		return
 	_cool -= delta
 	me.bot_move = Vector2.ZERO
+	me.bot_crouch = false
 	var gun: Node3D = game.gun
 	var partner: Node3D = game.partner
 
@@ -99,6 +100,7 @@ func _physics_process(delta: float) -> void:
 		me.bot_move = Vector2(0, -1)
 	elif partner != null:
 		_look_at(me, partner.chest_pos())
+		me.bot_crouch = gun.state == gun.HELD  # crouch while the partner has the gun
 
 
 ## True if the recall curve would pass through the partner.

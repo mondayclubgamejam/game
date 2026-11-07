@@ -17,6 +17,12 @@ const SKY_HORIZON := Color("ff6fa8")
 const STEEL := Color("3a3052")
 const BLADE := Color("d8dcec")
 const MUTED := Color("6d5f8f")
+const CRATE := Color("d0874a")
+## Enemy weapon colours (belt, weapon accents, HUD tags), by RoomGen.Kind:
+## gun = red (ranged danger), sword = bright steel, fists = lime.
+const KIND_COLORS := [Color("ff3344"), Color("e8ecf8"), Color("9bff3a")]
+const KIND_NAMES := ["GUN", "SWORD", "FISTS"]
+const CRATE_EDGE := Color("8a4f2a")
 
 static var _toon_cache := {}
 static var _glow_cache := {}

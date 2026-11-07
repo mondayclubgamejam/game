@@ -33,6 +33,7 @@ const Lobby := preload("res://scripts/lobby.gd")
 const Bot := preload("res://scripts/bot.gd")
 const LanDiscovery := preload("res://scripts/lan_discovery.gd")
 const DualServerPeer := preload("res://scripts/dual_server_peer.gd")
+const Clock := preload("res://scripts/clock.gd")
 
 enum Phase { LOBBY, PLAYING, OVER }
 
@@ -54,12 +55,15 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
 const SERVER_NAME := "one-gun-one-bullet"       ## the name inside that certificate
+const SLOW_IN_RATE := 3.0     ## how fast time eases into slow motion (per second)
+const SLOW_OUT_RATE := 10.0   ## and how fast it snaps back when someone moves
 const UDP_TRY_SECONDS := 2.5   ## how long to try UDP before falling back to WebSocket
 const WS_TRY_SECONDS := 8.0
 
 var phase := Phase.LOBBY
 var room_seed := 0
 var room_no := 1
+var attempt := 1          ## tries at the current room: +1 on every restart, 1 on a new room
 var peer_a := 1
 var peer_b := 0
 var bullet_seq := 0       ## newest bullet action; older results are ignored
@@ -99,6 +103,10 @@ var _peaceful := false
 var _bot_mode := false
 var _net_role := "offline"
 var _auto_join_lan := false
+var _slowmo_enabled := true
+var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
+var _tag_seen := {}            ## enemy -> visible from here (refreshed a few per frame)
+var _tag_i := 0
 var _dedicated := false        ## this process is a --server
 var _relayed := false          ## this client plays through a dedicated server
 var _queue: Array[int] = []    ## server: connected players, in join order
@@ -199,6 +207,8 @@ func _parse_args() -> void:
 			_log = true
 		elif arg == "--peaceful":
 			_peaceful = true
+		elif arg == "--no-slowmo":
+			_slowmo_enabled = false  # host/server: time always runs at normal speed
 		elif arg == "--bot":
 			_bot_mode = true
 			_log = true
@@ -273,7 +283,7 @@ func _on_peer_connected(id: int) -> void:
 		_server_on_join(id)
 	elif multiplayer.is_server() and phase == Phase.LOBBY:
 		_log_event("partner %d joined" % id)
-		start_round.rpc(_new_seed(), 1, multiplayer.get_unique_id(), id)
+		start_round.rpc(_new_seed(), 1, 1, multiplayer.get_unique_id(), id)
 
 
 func _on_connected() -> void:
@@ -396,7 +406,7 @@ func _server_on_join(id: int) -> void:
 	_queue.append(id)
 	_log_event("player %d connected via %s (%d/2)" % [id, how, _queue.size()])
 	if _queue.size() == 2:
-		start_round.rpc(_new_seed(), 1, _queue[0], _queue[1])
+		start_round.rpc(_new_seed(), 1, 1, _queue[0], _queue[1])
 	else:
 		waiting_for_partner.rpc_id(id, "")
 
@@ -527,11 +537,12 @@ func _new_seed() -> int:
 # --- Rounds ------------------------------------------------------------------------
 
 @rpc("authority", "call_local", "reliable")
-func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
+func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: int) -> void:
 	_clear_round()
 	round_id += 1
 	room_seed = seed_in
 	room_no = number
+	attempt = try_no
 	peer_a = a_peer
 	peer_b = b_peer
 	room = RoomGen.generate(seed_in)
@@ -562,7 +573,7 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 		round_root.add_child(e)
 		enemies.append(e)
 	_enemies_left = enemies.size()
-	_enemy_buf.resize(enemies.size() * 3)
+	_enemy_buf.resize(enemies.size() * 3 + 1)
 
 	gun = Gun.new()
 	round_root.add_child(gun)
@@ -592,7 +603,7 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 
 	lan.stop_advertising()  # one partner per game
 	lan.stop_searching()
-	_log_event("round %d seed %d: %d enemies" % [number, seed_in, enemies.size()])
+	_log_event("round %d try %d seed %d: %d enemies" % [number, try_no, seed_in, enemies.size()])
 	if local_player == null:
 		return  # dedicated server: no screen to update
 	lobby.visible = false
@@ -602,7 +613,8 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 	hand.role = local_player.role
 	hand.player = local_player
 	hud.clear_banners()
-	hud.banner("ROOM %d" % number, Palette.SIGNAL)
+	hud.attempt = try_no
+	hud.banner("ROOM %d" % number if try_no == 1 else "ROOM %d  ·  TRY %d" % [number, try_no], Palette.SIGNAL)
 	if not _bot_mode:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -622,6 +634,9 @@ func _clear_round() -> void:
 	tracers = null
 	debris = null
 	aim_line = null
+	Clock.scale = 1.0
+	_host_time_target = 1.0
+	_tag_seen.clear()
 
 
 ## Runs `fn` after `seconds` unless a new round started in between.
@@ -638,7 +653,7 @@ func room_cleared() -> void:
 	hud.banner("CLEAR!", Palette.ENEMY)
 	_log_event("room cleared")
 	if multiplayer.is_server():
-		_later(NEXT_ROOM_DELAY, func(): start_round.rpc(_new_seed(), room_no + 1, peer_a, peer_b))
+		_later(NEXT_ROOM_DELAY, func(): start_round.rpc(_new_seed(), room_no + 1, 1, peer_a, peer_b))
 
 
 @rpc("any_peer", "call_local", "reliable")
@@ -655,13 +670,13 @@ func player_down(peer: int, cause: String) -> void:
 	hud.banner("YOU DIED" if me else "PARTNER DOWN", Palette.DANGER)
 	_log_event("player %d down (%s)" % [peer, cause])
 	if multiplayer.is_server():
-		_later(RESTART_DELAY, func(): start_round.rpc(room_seed, room_no, peer_a, peer_b))
+		_later(RESTART_DELAY, func(): start_round.rpc(room_seed, room_no, attempt + 1, peer_a, peer_b))
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func request_restart() -> void:
 	if multiplayer.is_server() and phase != Phase.LOBBY:
-		start_round.rpc(room_seed, room_no, peer_a, peer_b)
+		start_round.rpc(room_seed, room_no, attempt + 1, peer_a, peer_b)
 
 
 func _local_died(cause: String) -> void:
@@ -983,20 +998,26 @@ func _on_local_shot() -> void:
 	_local_died("shot")
 
 
+## Packed enemy positions (x, z, yaw each), followed by the host's
+## slow-motion target as the last value.
 @rpc("authority", "call_remote", "unreliable_ordered", 2)
 func enemy_sync(data: PackedFloat32Array) -> void:
-	var n := mini(enemies.size(), data.size() / 3)
+	if data.is_empty():
+		return
+	_host_time_target = data[data.size() - 1]
+	var n := mini(enemies.size(), (data.size() - 1) / 3)
 	for i in n:
 		enemies[i].apply_net_state(data[i * 3], data[i * 3 + 1], data[i * 3 + 2])
 
 
 # --- Per-tick work ----------------------------------------------------------------------
 
+## `flags`: Player.FLAG_CROUCH / FLAG_MOVING.
 @rpc("any_peer", "call_remote", "unreliable_ordered", 1)
-func net_player_state(pos: Vector3, yaw: float, pitch: float) -> void:
+func net_player_state(pos: Vector3, yaw: float, pitch: float, flags: int) -> void:
 	var p: Player = players.get(multiplayer.get_remote_sender_id())
 	if p != null and not p.is_local:
-		p.apply_net_state(pos, yaw, pitch)
+		p.apply_net_state(pos, yaw, pitch, flags)
 
 
 @rpc("any_peer", "call_remote", "unreliable")
@@ -1025,7 +1046,8 @@ func _physics_process(delta: float) -> void:
 		multiplayer.poll()
 		return
 	if local_player != null:
-		net_player_state.rpc(local_player.global_position, local_player.rotation.y, local_player.pitch())
+		net_player_state.rpc(local_player.global_position, local_player.rotation.y, local_player.pitch(),
+			local_player.net_flags())
 		_ping_t -= delta
 		if _ping_t <= 0.0:
 			_ping_t = PING_INTERVAL
@@ -1035,6 +1057,7 @@ func _physics_process(delta: float) -> void:
 			else:
 				net_ping.rpc_id(1, Time.get_ticks_usec())
 
+	_update_clock(delta)
 	if multiplayer.is_server():
 		_sync_t -= delta
 		if _sync_t <= 0.0:
@@ -1044,6 +1067,7 @@ func _physics_process(delta: float) -> void:
 				_enemy_buf[i * 3] = e.global_position.x
 				_enemy_buf[i * 3 + 1] = e.global_position.z
 				_enemy_buf[i * 3 + 2] = e.rotation.y
+			_enemy_buf[enemies.size() * 3] = _host_time_target
 			enemy_sync.rpc(_enemy_buf)
 
 	if local_player != null and phase == Phase.PLAYING and local_player.alive:
@@ -1058,6 +1082,32 @@ func _physics_process(delta: float) -> void:
 	multiplayer.poll()
 
 
+# --- Slow motion ------------------------------------------------------------------------
+
+## Time slows while both players stand still and runs normally as soon as
+## either moves. The host decides (it hears both players) and sends its
+## decision with every enemy update; each player also speeds time up the
+## moment they move themselves, without waiting for the host.
+func _update_clock(delta: float) -> void:
+	var target := 1.0
+	if _slowmo_enabled and phase == Phase.PLAYING:
+		if multiplayer.is_server():
+			var anyone_moving := false
+			for p in players.values():
+				if p.is_moving():
+					anyone_moving = true
+			var was := _host_time_target
+			_host_time_target = 1.0 if anyone_moving or players.is_empty() else Clock.SLOW
+			if was != _host_time_target:
+				_log_event("time slowed" if _host_time_target < 1.0 else "time normal")
+			target = _host_time_target
+		else:
+			target = 1.0 if local_player != null and local_player.is_moving() else _host_time_target
+	var rate := SLOW_OUT_RATE if target > Clock.scale else SLOW_IN_RATE
+	Clock.scale = move_toward(Clock.scale, target, rate * delta)
+	fx.set_slowmo(inverse_lerp(1.0, Clock.SLOW, Clock.scale))
+
+
 func _process(_delta: float) -> void:
 	if phase == Phase.LOBBY or local_player == null:
 		return
@@ -1066,6 +1116,8 @@ func _process(_delta: float) -> void:
 	hud.ping_ms = int(rtt * 1000.0) if rtt > 0.0 else -1
 	_update_status()
 	_update_markers()
+	_update_enemy_tags()
+	hud.slowmo = inverse_lerp(1.0, Clock.SLOW, Clock.scale)
 
 
 # --- Aim preview --------------------------------------------------------------------------
@@ -1206,12 +1258,37 @@ func _update_status() -> void:
 func _update_markers() -> void:
 	hud.markers.clear()
 	if partner != null:
-		_add_marker(partner.global_position + Vector3(0, 2.4, 0), Palette.role_color(partner.role),
-			"A" if partner.role == ROLE_FORWARD else "B")
+		var label := "A" if partner.role == ROLE_FORWARD else "B"
+		if partner.carrying:
+			label += "  ·  GUN"
+		_add_marker(partner.global_position + Vector3(0, 2.4, 0), Palette.role_color(partner.role), label)
 	if gun != null and gun.holder != local_player and gun.state != Gun.HELD:
 		_add_marker(gun.global_position + Vector3(0, 0.5, 0), Palette.SIGNAL, "GUN")
 	if bullet != null and bullet.state == Bullet.LODGED:
 		_add_marker(bullet.lodge_pos, Palette.REVERSE, "BULLET")
+
+
+## Weapon badges over every enemy this player can see.
+func _update_enemy_tags() -> void:
+	hud.enemy_tags.clear()
+	if enemies.is_empty():
+		return
+	var eye := local_player.eye_pos()
+	# Re-check line of sight for a few enemies per frame.
+	for k in mini(4, enemies.size()):
+		_tag_i = (_tag_i + 1) % enemies.size()
+		var e: Node3D = enemies[_tag_i]
+		var head := e.global_position + Vector3(0, 1.9, 0)
+		_tag_seen[e] = e.alive and eye.distance_to(head) < 40.0 and _ray_world(eye, head) == null
+	var cam: Camera3D = local_player.camera
+	for e in enemies:
+		if not e.alive or not _tag_seen.get(e, false):
+			continue
+		var above: Vector3 = e.global_position + Vector3(0, 2.6, 0)
+		if cam.is_position_behind(above):
+			continue
+		var near := clampf(12.0 / maxf(eye.distance_to(above), 0.1), 0.55, 1.15)
+		hud.enemy_tags.append([cam.unproject_position(above), e.kind, e.winding_up(), near])
 
 
 func _add_marker(world: Vector3, col: Color, label: String) -> void:
@@ -1245,6 +1322,9 @@ func _setup_input() -> void:
 	_add_key("move_left", [KEY_A, KEY_LEFT])
 	_add_key("move_right", [KEY_D, KEY_RIGHT])
 	_add_key("restart", [KEY_R])
+	_add_key("jump", [KEY_SPACE])
+	_add_key("crouch", [KEY_CTRL, KEY_C])
+	_add_key("sprint", [KEY_SHIFT])
 	_add_key("release_mouse", [KEY_ESCAPE])
 	_add_key("primary", [KEY_F])
 	_add_key("throw", [KEY_Q])

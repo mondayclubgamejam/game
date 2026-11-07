@@ -6,6 +6,7 @@
 //
 //   rewind  0..1  cold duotone with white ink (player B's recall)
 //   punch   0..1  short high-contrast flash on kills
+//   slowmo  0..1  slow motion: drained, cool, faded print with a heavier vignette
 shader_type spatial;
 render_mode unshaded, cull_disabled, depth_test_disabled, depth_draw_never, shadows_disabled, fog_disabled;
 
@@ -24,6 +25,7 @@ uniform float dot_size = 0.0105;     // halftone cell, as a fraction of screen h
 uniform float levels = 6.0;
 uniform float rewind = 0.0;
 uniform float punch = 0.0;
+uniform float slowmo = 0.0;
 
 void vertex() {
 	POSITION = vec4(VERTEX.xy, 1.0, 1.0);
@@ -68,6 +70,10 @@ void fragment() {
 	c = floor(c * levels + 0.5) / levels;
 	float lum = dot(c, vec3(0.299, 0.587, 0.114));
 
+	// Slow motion: drain most of the colour toward a cool grey.
+	vec3 grey = vec3(lum) * vec3(0.92, 0.96, 1.06);
+	c = mix(c, grey, slowmo * 0.6);
+
 	// Rewind: same page, printed in two cold inks.
 	vec3 duo = mix(pow(cold_dark, vec3(0.4545)), pow(cold_light, vec3(0.4545)), smoothstep(0.12, 0.85, lum));
 	c = mix(c, duo, rewind * 0.85);
@@ -93,7 +99,8 @@ void fragment() {
 
 	// Vignette.
 	vec2 q = (uv - 0.5) * vec2(VIEWPORT_SIZE.x / VIEWPORT_SIZE.y, 1.0);
-	c = mix(c, mix(pow(ink, vec3(0.4545)), pow(cold_dark, vec3(0.4545)), rewind), smoothstep(0.5, 1.05, length(q)) * 0.5);
+	float vig = smoothstep(0.5 - slowmo * 0.15, 1.05, length(q)) * (0.5 + slowmo * 0.3);
+	c = mix(c, mix(pow(ink, vec3(0.4545)), pow(cold_dark, vec3(0.4545)), rewind), vig);
 
 	ALBEDO = pow(c, vec3(2.2));
 }

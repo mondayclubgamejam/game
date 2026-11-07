@@ -2,18 +2,34 @@ extends CharacterBody3D
 ## One player. The local player reads input and owns its own movement, so
 ## moving never waits on the network. The remote player is extrapolated from
 ## the latest network update and smoothed.
+##
+## Movement: walk, sprint (Shift, not while carrying the heavy gun), crouch
+## (Ctrl/C: shorter and slower, so low crates hide you) and jump (Space).
 
 const Palette := preload("res://scripts/palette.gd")
 
 const SPEED := 6.5
+const SPRINT_SPEED := 9.5
 const CARRY_SPEED := 3.2     ## the gun is heavy
+const CROUCH_SPEED := 3.0
 const ACCEL := 55.0
+const AIR_ACCEL := 18.0
 const GRAVITY := 22.0
+const JUMP_VELOCITY := 7.2   ## about 1.2 m: enough to get onto a crate
 const EYE := 1.6
+const CROUCH_EYE := 1.0
+const HEIGHT := 1.8
+const CROUCH_HEIGHT := 1.15
+const CROUCH_RATE := 9.0     ## how fast crouching eases in and out
+const MOVING_SPEED := 0.4    ## slower than this on the ground counts as standing still
 const MOUSE_SENS := 0.0022
 const LAYER_PLAYER := 4
 const MASK_WORLD := 1
 const MAX_EXTRAPOLATE := 0.12
+
+## Bits of the flags sent with every network update.
+const FLAG_CROUCH := 1
+const FLAG_MOVING := 2
 
 var peer_id := 0
 var role := 0                ## 0 = forward (A), 1 = reverse (B)
@@ -22,19 +38,26 @@ var alive := true
 var carrying := false        ## set by the game when this player holds the gun
 var input_enabled := true
 var bot_move := Vector2.ZERO ## used by the test bot instead of the keyboard
-var move_amount := 0.0       ## 0..1, read by the hand overlay for bob
+var bot_crouch := false
+var move_amount := 0.0       ## 0..1+, read by the hand overlay for bob
+var crouching := false
+var sprinting := false
 
 var head: Node3D
 var camera: Camera3D
 var hand_anchor: Node3D      ## where a remote player's gun is drawn
 
+var _shape: CollisionShape3D
+var _capsule: CapsuleShape3D
+var _crouch_t := 0.0         ## 0 standing .. 1 crouched, eased
+var _body: Node3D            ## remote: the visible body, squashed when crouching
 var _net_pos := Vector3.ZERO
 var _net_vel := Vector3.ZERO
 var _net_yaw := 0.0
 var _net_pitch := 0.0
 var _net_age := 0.0
+var _net_moving := false
 var _has_net := false
-var _body_parts: Array[MeshInstance3D] = []
 
 
 func setup(id: int, player_role: int, local: bool) -> void:
@@ -47,13 +70,13 @@ func setup(id: int, player_role: int, local: bool) -> void:
 func _ready() -> void:
 	collision_layer = LAYER_PLAYER
 	collision_mask = MASK_WORLD
-	var capsule := CapsuleShape3D.new()
-	capsule.radius = 0.35
-	capsule.height = 1.8
-	var shape := CollisionShape3D.new()
-	shape.shape = capsule
-	shape.position.y = 0.9
-	add_child(shape)
+	_capsule = CapsuleShape3D.new()
+	_capsule.radius = 0.35
+	_capsule.height = HEIGHT
+	_shape = CollisionShape3D.new()
+	_shape.shape = _capsule
+	_shape.position.y = HEIGHT * 0.5
+	add_child(_shape)
 
 	head = Node3D.new()
 	head.position.y = EYE
@@ -71,16 +94,16 @@ func _ready() -> void:
 		camera.make_current()
 	else:
 		_build_body()
-		# Remote bodies only move by network updates.
-		set_physics_process(true)
 
 
 func _build_body() -> void:
 	var color := Palette.role_color(role)
+	_body = Node3D.new()
+	add_child(_body)
 	var body := CapsuleMesh.new()
 	body.radius = 0.36
 	body.height = 1.5
-	_add_part(body, Vector3(0, 0.75, 0), Palette.toon(color), self)
+	_add_part(body, Vector3(0, 0.75, 0), Palette.toon(color), _body)
 	var head_mesh := SphereMesh.new()
 	head_mesh.radius = 0.27
 	head_mesh.height = 0.54
@@ -98,7 +121,6 @@ func _add_part(mesh: Mesh, pos: Vector3, mat: Material, parent: Node3D) -> void:
 	mi.position = pos
 	mi.material_override = mat
 	parent.add_child(mi)
-	_body_parts.append(mi)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -115,22 +137,71 @@ func _physics_process(delta: float) -> void:
 		_local_move(delta)
 	else:
 		_remote_follow(delta)
+	_apply_crouch(delta)
 
 
 func _local_move(delta: float) -> void:
 	var input := Vector2.ZERO
+	var wants_crouch := false
+	var wants_sprint := false
+	var wants_jump := false
 	if alive and input_enabled:
 		input = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 		if bot_move != Vector2.ZERO:
 			input = bot_move
-	var speed := CARRY_SPEED if carrying else SPEED
+		wants_crouch = Input.is_action_pressed("crouch") or bot_crouch
+		wants_sprint = Input.is_action_pressed("sprint")
+		wants_jump = Input.is_action_just_pressed("jump")
+	crouching = wants_crouch
+	# Sprint only forward-ish, standing, and with free hands.
+	sprinting = wants_sprint and not carrying and not crouching and input.y < -0.3
+
+	var speed := SPEED
+	if sprinting:
+		speed = SPRINT_SPEED
+	if carrying:
+		speed = minf(speed, CARRY_SPEED)
+	if crouching:
+		speed = minf(speed, CROUCH_SPEED)
+
+	var on_floor := is_on_floor()
 	var wish := (global_basis * Vector3(input.x, 0.0, input.y)) * speed
-	var flat := Vector3(velocity.x, 0.0, velocity.z).move_toward(wish, ACCEL * delta)
+	var accel := ACCEL if on_floor else AIR_ACCEL
+	var flat := Vector3(velocity.x, 0.0, velocity.z).move_toward(wish, accel * delta)
 	velocity.x = flat.x
 	velocity.z = flat.z
-	velocity.y = 0.0 if is_on_floor() else velocity.y - GRAVITY * delta
+	if on_floor:
+		velocity.y = JUMP_VELOCITY if wants_jump and not crouching else 0.0
+	else:
+		velocity.y -= GRAVITY * delta
 	move_and_slide()
 	move_amount = flat.length() / SPEED
+
+
+func _apply_crouch(delta: float) -> void:
+	var target := 1.0 if crouching else 0.0
+	if is_equal_approx(_crouch_t, target):
+		return
+	_crouch_t = move_toward(_crouch_t, target, delta * CROUCH_RATE)
+	var h := lerpf(HEIGHT, CROUCH_HEIGHT, _crouch_t)
+	_capsule.height = h
+	_shape.position.y = h * 0.5
+	head.position.y = lerpf(EYE, CROUCH_EYE, _crouch_t)
+	if _body != null:
+		_body.scale.y = h / HEIGHT
+
+
+## True if this player counts as moving for the slow-motion rule.
+func is_moving() -> bool:
+	if not alive:
+		return false
+	if not is_local:
+		return _net_moving
+	return Vector2(velocity.x, velocity.z).length() > MOVING_SPEED or not is_on_floor()
+
+
+func net_flags() -> int:
+	return (FLAG_CROUCH if crouching else 0) | (FLAG_MOVING if is_moving() else 0)
 
 
 func _remote_follow(delta: float) -> void:
@@ -148,7 +219,7 @@ func _remote_follow(delta: float) -> void:
 
 
 ## Called when a network update for this (remote) player arrives.
-func apply_net_state(pos: Vector3, yaw: float, pitch: float) -> void:
+func apply_net_state(pos: Vector3, yaw: float, pitch_in: float, flags: int) -> void:
 	if _has_net and _net_age > 0.0:
 		var v := (pos - _net_pos) / maxf(_net_age, 1.0 / 120.0)
 		_net_vel = _net_vel.lerp(v, 0.5)
@@ -157,9 +228,11 @@ func apply_net_state(pos: Vector3, yaw: float, pitch: float) -> void:
 		_net_vel = Vector3.ZERO
 	_net_pos = pos
 	_net_yaw = yaw
-	_net_pitch = pitch
+	_net_pitch = pitch_in
 	_net_age = 0.0
 	_has_net = true
+	crouching = flags & FLAG_CROUCH != 0
+	_net_moving = flags & FLAG_MOVING != 0
 
 
 func place(pos: Vector3, yaw: float) -> void:
@@ -194,8 +267,9 @@ func velocity_estimate() -> Vector3:
 	return velocity if is_local else _net_vel
 
 
+## Where enemies aim: lower while crouched.
 func chest_pos() -> Vector3:
-	return global_position + Vector3(0, 1.2, 0)
+	return global_position + Vector3(0, lerpf(1.2, 0.75, _crouch_t), 0)
 
 
 func kill() -> void:
