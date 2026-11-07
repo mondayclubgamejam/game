@@ -3,15 +3,17 @@ extends RefCounted
 ##   #  wall          .  floor        A  player start
 ##   E  enemy         S  shielded enemy (faces the nearest `d`)
 ##   D  exit door     d  open doorway   G / B  treated as floor for now
+##   P  neon pillar   C  stacked crates (both block bullets)
 
 const Enemy := preload("res://scripts/enemy.gd")
+const Dressing := preload("res://scripts/cyber_dressing.gd")
 
 const TILE := 2.0
-const WALL_H := 3.2
+const WALL_H := 4.0
 
-const WALL_COLOR := Color("5a3c8c")
-const FLOOR_A := Color("f3e9d2")
-const FLOOR_B := Color("e3d3b0")
+const WALL_COLOR := Color("34323f")
+const FLOOR_A := Color("2b2a33")
+const FLOOR_B := Color("24232b")
 const DOOR_COLOR := Color("ffcc1a")
 
 
@@ -27,7 +29,7 @@ static func toon(color: Color) -> StandardMaterial3D:
 ## Returns { spawn: Vector3, enemies: Array, doors: Array, exit_z: float }.
 static func build(root: Node3D, map: Array) -> Dictionary:
 	var wall_mat := toon(WALL_COLOR)
-	var floor_mats := [toon(FLOOR_A), toon(FLOOR_B)]
+	var floor_mats := [Dressing.wet(FLOOR_A), Dressing.wet(FLOOR_B)]
 	var door_mat := toon(DOOR_COLOR)
 
 	var rows := map.size()
@@ -47,7 +49,7 @@ static func build(root: Node3D, map: Array) -> Dictionary:
 			var ch := line[c]
 			var p := Vector3(c * TILE, 0, r * TILE)
 			if ch == "#":
-				_add_box(root, p + Vector3(0, WALL_H / 2.0, 0),
+				add_box(root, p + Vector3(0, WALL_H / 2.0, 0),
 					Vector3(TILE, WALL_H, TILE), wall_mat, true)
 				continue
 			_add_floor_tile(root, p, floor_mats[(r + c) % 2])
@@ -59,9 +61,13 @@ static func build(root: Node3D, map: Array) -> Dictionary:
 				"d":
 					doorways.append(p)
 				"D":
-					doors.append(_add_box(root, p + Vector3(0, WALL_H / 2.0, 0),
+					doors.append(add_box(root, p + Vector3(0, WALL_H / 2.0, 0),
 						Vector3(TILE, WALL_H, TILE * 0.5), door_mat, true))
 					door_cols.append(c)
+				"P":
+					Dressing.pillar(root, p, WALL_H)
+				"C":
+					Dressing.crates(root, p, r * 31 + c)
 
 	# A little floor outside each exit door so the player can walk out.
 	for c in door_cols:
@@ -81,6 +87,8 @@ static func build(root: Node3D, map: Array) -> Dictionary:
 	floor_body.add_child(shape)
 	floor_body.position = Vector3((cols - 1) * TILE / 2.0, -0.1, (rows + 2) * TILE / 2.0)
 	root.add_child(floor_body)
+
+	Dressing.dress(root, map, TILE, WALL_H)
 
 	var enemies := []
 	for spec in enemy_specs:
@@ -120,7 +128,7 @@ static func _add_floor_tile(root: Node3D, p: Vector3, mat: Material) -> void:
 	root.add_child(mi)
 
 
-static func _add_box(root: Node3D, center: Vector3, size: Vector3, mat: Material,
+static func add_box(root: Node3D, center: Vector3, size: Vector3, mat: Material,
 		solid: bool) -> StaticBody3D:
 	var body := StaticBody3D.new()
 	body.collision_layer = 1 if solid else 0

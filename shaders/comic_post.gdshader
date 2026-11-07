@@ -25,6 +25,7 @@ uniform float depth_threshold = 0.07;
 uniform float normal_threshold = 0.35;
 uniform float halftone_px = 7.0;
 uniform float halftone_strength = 0.55;
+uniform float halftone_start = 0.62;  // tones darker than this get dots
 uniform float posterize_levels = 6.0;
 
 uniform float rewind = 0.0;
@@ -92,7 +93,7 @@ void fragment() {
 	srgb = mix(srgb, duo, rewind * 0.85);
 
 	// --- Halftone: in shadows going forward, in highlights while rewinding ---
-	float shadow = smoothstep(0.62, 0.2, lum);
+	float shadow = smoothstep(halftone_start, 0.2 * halftone_start / 0.62, lum);
 	float highlight = smoothstep(0.45, 0.9, lum);
 	float tone = mix(shadow, highlight * 0.8, rewind);
 	vec2 p = FRAGCOORD.xy / halftone_px;

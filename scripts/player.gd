@@ -31,6 +31,7 @@ var lodge_pos := Vector3.ZERO
 var move_amount := 0.0  ## 0..1+, read by the hand overlay for bobbing
 
 var camera: Camera3D
+var muzzle_node: Node3D  ## set by the viewmodel; aim lines start here
 var _bullet: Node3D
 var _bullet_mat: StandardMaterial3D
 var _bullet_light: OmniLight3D
@@ -214,6 +215,8 @@ func _aim_dir() -> Vector3:
 
 
 func _muzzle() -> Vector3:
+	if muzzle_node:
+		return muzzle_node.global_position
 	return camera.global_transform * Vector3(0.16, -0.17, -0.45)
 
 

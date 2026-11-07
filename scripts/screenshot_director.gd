@@ -49,7 +49,6 @@ func _run() -> void:
 	await _wait(1.2)
 	await _shot("08_clear_door")
 
-	await _overview()
 	get_tree().quit()
 
 

@@ -1,10 +1,10 @@
 extends Node3D
 ## Builds the whole MVP in code: input map, environment, comic post-process,
-## level, player, hand overlay and HUD. Handles door, restart and next level.
+## level, player, 3D hand-and-gun viewmodel and HUD. Handles door, restart and next level.
 
 const LevelBuilder := preload("res://scripts/level_builder.gd")
 const Player := preload("res://scripts/player.gd")
-const HandOverlay := preload("res://scripts/hand_overlay.gd")
+const Viewmodel := preload("res://scripts/viewmodel.gd")
 const Hud := preload("res://scripts/hud.gd")
 const PostShader := preload("res://shaders/comic_post.gdshader")
 const ScreenshotDirector := preload("res://scripts/screenshot_director.gd")
@@ -15,12 +15,12 @@ const LEVELS := [
 		"facing": -90.0,
 		"map": [
 			"###############",
-			"#.............#",
-			"#..A.G........#",
+			"#....C........#",
+			"#..A.G.....P..#",
 			"#.........E...#",
-			"#.............#",
-			"#..B......E...#",
-			"#.............#",
+			"#......P......#",
+			"#CC.......E...#",
+			"#C..........P.#",
 			"#######D#######",
 		],
 	},
@@ -61,7 +61,7 @@ const KILL_WORDS := ["", "DOWN!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 static var level_index := 0
 
 var player: Player
-var hand: HandOverlay
+var hand: Viewmodel
 var hud: Hud
 var _doors: Array = []
 var _exit_z := 0.0
@@ -91,9 +91,10 @@ func _ready() -> void:
 	var ui := CanvasLayer.new()
 	ui.name = "UI"
 	add_child(ui)
-	hand = HandOverlay.new()
+	hand = Viewmodel.new()
 	hand.player = player
-	ui.add_child(hand)
+	player.camera.add_child(hand)
+	player.muzzle_node = hand.muzzle
 	hud = Hud.new()
 	ui.add_child(hud)
 	hud.targets = _enemies_left
@@ -176,33 +177,28 @@ func _add_action(action: String, keys: Array) -> void:
 
 
 func _build_environment() -> void:
-	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color("2a1446")
-	sky_mat.sky_horizon_color = Color("ff6fa8")
-	sky_mat.ground_horizon_color = Color("ff6fa8")
-	sky_mat.ground_bottom_color = Color("2a1446")
-	var sky := Sky.new()
-	sky.sky_material = sky_mat
-
+	# Enclosed room: no sky or sun. Light comes from ceiling panels and neon.
 	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	env.sky = sky
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color("07060b")
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color("b9a6d9")
-	env.ambient_light_energy = 0.55
+	env.ambient_light_color = Color("3a3560")
+	env.ambient_light_energy = 0.5
+	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.glow_enabled = true
-	env.glow_intensity = 0.7
-	env.glow_hdr_threshold = 1.0
+	env.glow_intensity = 0.9
+	env.glow_bloom = 0.05
+	env.glow_hdr_threshold = 0.9
+	# Wet floor reflections and a light haze that catches the lights.
+	env.ssr_enabled = true
+	env.ssr_max_steps = 64
+	env.volumetric_fog_enabled = true
+	env.volumetric_fog_density = 0.02
+	env.volumetric_fog_albedo = Color("8f86c8")
 
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
-
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55, -35, 0)
-	sun.light_energy = 1.1
-	sun.shadow_enabled = true
-	add_child(sun)
 
 
 func _build_post_process() -> void:
@@ -214,6 +210,10 @@ func _build_post_process() -> void:
 	mat.shader = PostShader
 	mat.render_priority = Material.RENDER_PRIORITY_MIN
 	quad.material_override = mat
+	# Lighter halftone for a dark scene: dots only in the deep shadows.
+	mat.set_shader_parameter("halftone_start", 0.32)
+	mat.set_shader_parameter("halftone_strength", 0.35)
+	mat.set_shader_parameter("posterize_levels", 255.0)  # off: it bands light falloff
 	quad.custom_aabb = AABB(Vector3(-10000, -10000, -10000), Vector3(20000, 20000, 20000))
 	quad.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(quad)
