@@ -6,7 +6,6 @@ extends Node3D
 const Palette := preload("res://scripts/palette.gd")
 const Traj := preload("res://scripts/trajectory.gd")
 const PulseShader := preload("res://shaders/pulse.gdshader")
-const Clock := preload("res://scripts/clock.gd")
 
 enum { HELD, FLYING, GROUND }
 
@@ -81,7 +80,7 @@ func throw(from: Vector3, vel: Vector3, by: Node3D, fast_forward: float) -> void
 	global_position = from
 	_vel = vel
 	_refresh_visual()
-	var t := fast_forward * Clock.scale
+	var t := fast_forward
 	while t >= STEP and state == FLYING:
 		_step(STEP)
 		t -= STEP
@@ -102,9 +101,9 @@ func _refresh_visual() -> void:
 func _physics_process(delta: float) -> void:
 	match state:
 		FLYING:
-			_step(delta * Clock.scale)
+			_step(delta)
 		GROUND:
-			since_land += delta * Clock.scale
+			since_land += delta
 		HELD:
 			if holder != null and not holder.is_local:
 				global_transform = holder.hand_anchor.global_transform

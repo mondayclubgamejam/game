@@ -3,7 +3,6 @@ extends MultiMeshInstance3D
 ## (gravity + floor bounce), no rigid bodies.
 
 const Palette := preload("res://scripts/palette.gd")
-const Clock := preload("res://scripts/clock.gd")
 
 const MAX := 128
 const PER_BURST := 10
@@ -62,8 +61,7 @@ func burst(center: Vector3, dir: Vector3) -> void:
 	set_process(true)
 
 
-func _process(real_delta: float) -> void:
-	var delta := real_delta * Clock.scale
+func _process(delta: float) -> void:
 	for i in MAX:
 		if _life[i] <= 0.0:
 			continue

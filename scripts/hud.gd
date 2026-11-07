@@ -4,7 +4,7 @@ extends Control
 
 const Palette := preload("res://scripts/palette.gd")
 
-const HINT := "WASD MOVE   SHIFT SPRINT   SPACE JUMP   CTRL CROUCH   LMB FIRE / RECALL   RMB THROW   R RESTART   ESC MOUSE"
+const HINT := "WASD MOVE   SPACE JUMP   CTRL CROUCH   LMB FIRE / RECALL   RMB THROW   R RESTART   ESC MOUSE"
 
 var font: Font
 
@@ -18,8 +18,6 @@ var targets := 0
 var attempt := 1
 var ping_ms := -1
 var markers: Array = []          ## [Vector2 pos, Color, String label, bool on_screen]
-var enemy_tags: Array = []       ## [Vector2 pos, int kind, bool winding_up, float size]
-var slowmo := 0.0                ## 0 normal time .. 1 full slow motion
 
 var _banner_text := ""
 var _banner_color := Palette.FORWARD
@@ -74,11 +72,6 @@ func _draw() -> void:
 	var s := h / 720.0
 	var role_col := Palette.role_color(role)
 
-	for t in enemy_tags:
-		_draw_enemy_tag(t[0], t[1], t[2], t[3] * s)
-	if slowmo > 0.35:
-		_draw_slowmo(w, s)
-
 	for m in markers:
 		_draw_marker(m[0], m[1], m[2], m[3], s)
 
@@ -114,53 +107,6 @@ func _draw() -> void:
 
 	if _banner_x < 1.6:
 		_draw_banner(w, h, s)
-
-
-## A slanted badge in the enemy's weapon colour with a pistol, sword or fist
-## drawn in ink. It flashes red and grows while the enemy winds up an attack.
-func _draw_enemy_tag(c: Vector2, kind: int, winding: bool, sc: float) -> void:
-	var r := 17.0 * sc * (1.35 if winding else 1.0)
-	if r < 3.0 or not c.is_finite() or not Rect2(Vector2.ZERO, size).grow(60.0).has_point(c):
-		return  # too small, or off screen (points near the camera plane project far away)
-	var col: Color = Palette.KIND_COLORS[kind]
-	if winding and int(Time.get_ticks_msec() / 90) % 2 == 0:
-		col = Palette.DANGER
-	var outer := PackedVector2Array([c + Vector2(-0.95, -0.8) * r, c + Vector2(1.2, -0.8) * r,
-		c + Vector2(0.95, 0.8) * r, c + Vector2(-1.2, 0.8) * r])
-	draw_colored_polygon(outer, Palette.INK)
-	var inner := PackedVector2Array()
-	for p in outer:
-		inner.append(c + (p - c) * 0.78)
-	draw_colored_polygon(inner, col)
-	var ink := Palette.INK
-	match kind:
-		0:  # pistol: barrel and grip
-			draw_rect(Rect2(c + Vector2(-0.6, -0.42) * r, Vector2(1.2, 0.3) * r), ink)
-			draw_colored_polygon(PackedVector2Array([c + Vector2(-0.6, -0.12) * r, c + Vector2(-0.2, -0.12) * r,
-				c + Vector2(-0.3, 0.5) * r, c + Vector2(-0.68, 0.5) * r]), ink)
-		1:  # sword: diagonal blade with a crossguard
-			draw_line(c + Vector2(-0.5, 0.48) * r, c + Vector2(0.62, -0.55) * r, ink, 0.2 * r)
-			draw_line(c + Vector2(-0.48, -0.02) * r, c + Vector2(-0.02, 0.42) * r, ink, 0.16 * r)
-		_:  # fist: round with knuckle lines
-			draw_circle(c, 0.46 * r, ink)
-			for i in 3:
-				var x := (-0.22 + i * 0.22) * r
-				draw_line(c + Vector2(x, -0.3 * r), c + Vector2(x, 0.0), col, 0.08 * r)
-	if winding:
-		_text("!", c + Vector2(1.25 * r, 0.55 * r), int(2.0 * r), Palette.DANGER, int(0.25 * r))
-
-
-func _draw_slowmo(w: float, s: float) -> void:
-	var a := clampf((slowmo - 0.35) / 0.4, 0.0, 1.0)
-	var pos := Vector2(w * 0.5 - 95 * s, 66 * s)  # top centre, below markers pinned to the edge
-	var fill := Color(Palette.MUTED.lightened(0.35), a)
-	var ink := Color(Palette.INK, a)
-	draw_colored_polygon(PackedVector2Array([pos + Vector2(14, 0) * s, pos + Vector2(190, 0) * s,
-		pos + Vector2(176, 40) * s, pos + Vector2(0, 40) * s]), ink)
-	draw_colored_polygon(PackedVector2Array([pos + Vector2(18, 4) * s, pos + Vector2(184, 4) * s,
-		pos + Vector2(172, 36) * s, pos + Vector2(6, 36) * s]), fill)
-	draw_string(font, pos + Vector2(30, 31) * s, "TIME SLOWED", HORIZONTAL_ALIGNMENT_LEFT, -1,
-		int(26 * s), Color(Color.WHITE, a))
 
 
 func _draw_marker(p: Vector2, col: Color, label: String, on_screen: bool, s: float) -> void:

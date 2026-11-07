@@ -15,7 +15,6 @@ signal arrived
 const Palette := preload("res://scripts/palette.gd")
 const Traj := preload("res://scripts/trajectory.gd")
 const PulseShader := preload("res://shaders/pulse.gdshader")
-const Clock := preload("res://scripts/clock.gd")
 
 enum { IN_GUN, FORWARD, LODGED, RECALL, WAITING }
 
@@ -109,7 +108,7 @@ func fire(from: Vector3, dir: Vector3, by: Node3D, is_authority: bool, fast_forw
 	_show(Palette.FORWARD, false)
 	_place(_pos, _dir)
 	set_physics_process(true)
-	_fast_forward(fast_forward * Clock.scale)
+	_fast_forward(fast_forward)
 
 
 func recall(by: Node3D, is_authority: bool, fast_forward: float) -> void:
@@ -124,7 +123,7 @@ func recall(by: Node3D, is_authority: bool, fast_forward: float) -> void:
 	_exclude.append(by.get_rid())
 	_show(Palette.REVERSE, false)
 	set_physics_process(true)
-	_fast_forward(fast_forward * Clock.scale)
+	_fast_forward(fast_forward)
 
 
 ## Authoritative result: the bullet is stuck here.
@@ -147,7 +146,7 @@ func _fast_forward(seconds: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	_step(delta * Clock.scale)
+	_step(delta)
 
 
 func _step(delta: float) -> void:

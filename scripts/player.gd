@@ -3,13 +3,12 @@ extends CharacterBody3D
 ## moving never waits on the network. The remote player is extrapolated from
 ## the latest network update and smoothed.
 ##
-## Movement: walk, sprint (Shift, not while carrying the heavy gun), crouch
-## (Ctrl/C: shorter and slower, so low crates hide you) and jump (Space).
+## Movement: walk, crouch (Ctrl/C: shorter and slower, so low crates hide
+## you) and jump (Space).
 
 const Palette := preload("res://scripts/palette.gd")
 
 const SPEED := 6.5
-const SPRINT_SPEED := 9.5
 const CARRY_SPEED := 3.2     ## the gun is heavy
 const CROUCH_SPEED := 3.0
 const ACCEL := 55.0
@@ -21,7 +20,6 @@ const CROUCH_EYE := 1.0
 const HEIGHT := 1.8
 const CROUCH_HEIGHT := 1.15
 const CROUCH_RATE := 9.0     ## how fast crouching eases in and out
-const MOVING_SPEED := 0.4    ## slower than this on the ground counts as standing still
 const MOUSE_SENS := 0.0022
 const LAYER_PLAYER := 4
 const MASK_WORLD := 1
@@ -29,7 +27,6 @@ const MAX_EXTRAPOLATE := 0.12
 
 ## Bits of the flags sent with every network update.
 const FLAG_CROUCH := 1
-const FLAG_MOVING := 2
 
 var peer_id := 0
 var role := 0                ## 0 = forward (A), 1 = reverse (B)
@@ -41,7 +38,6 @@ var bot_move := Vector2.ZERO ## used by the test bot instead of the keyboard
 var bot_crouch := false
 var move_amount := 0.0       ## 0..1+, read by the hand overlay for bob
 var crouching := false
-var sprinting := false
 
 var head: Node3D
 var camera: Camera3D
@@ -56,7 +52,6 @@ var _net_vel := Vector3.ZERO
 var _net_yaw := 0.0
 var _net_pitch := 0.0
 var _net_age := 0.0
-var _net_moving := false
 var _has_net := false
 
 
@@ -143,22 +138,15 @@ func _physics_process(delta: float) -> void:
 func _local_move(delta: float) -> void:
 	var input := Vector2.ZERO
 	var wants_crouch := false
-	var wants_sprint := false
 	var wants_jump := false
 	if alive and input_enabled:
 		input = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 		if bot_move != Vector2.ZERO:
 			input = bot_move
 		wants_crouch = Input.is_action_pressed("crouch") or bot_crouch
-		wants_sprint = Input.is_action_pressed("sprint")
 		wants_jump = Input.is_action_just_pressed("jump")
 	crouching = wants_crouch
-	# Sprint only forward-ish, standing, and with free hands.
-	sprinting = wants_sprint and not carrying and not crouching and input.y < -0.3
-
 	var speed := SPEED
-	if sprinting:
-		speed = SPRINT_SPEED
 	if carrying:
 		speed = minf(speed, CARRY_SPEED)
 	if crouching:
@@ -191,17 +179,8 @@ func _apply_crouch(delta: float) -> void:
 		_body.scale.y = h / HEIGHT
 
 
-## True if this player counts as moving for the slow-motion rule.
-func is_moving() -> bool:
-	if not alive:
-		return false
-	if not is_local:
-		return _net_moving
-	return Vector2(velocity.x, velocity.z).length() > MOVING_SPEED or not is_on_floor()
-
-
 func net_flags() -> int:
-	return (FLAG_CROUCH if crouching else 0) | (FLAG_MOVING if is_moving() else 0)
+	return FLAG_CROUCH if crouching else 0
 
 
 func _remote_follow(delta: float) -> void:
@@ -232,7 +211,6 @@ func apply_net_state(pos: Vector3, yaw: float, pitch_in: float, flags: int) -> v
 	_net_age = 0.0
 	_has_net = true
 	crouching = flags & FLAG_CROUCH != 0
-	_net_moving = flags & FLAG_MOVING != 0
 
 
 func place(pos: Vector3, yaw: float) -> void:

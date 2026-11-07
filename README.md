@@ -31,7 +31,6 @@ It builds the game the first time (about 30 seconds; it fetches Godot by itself)
 | Input | Action |
 |---|---|
 | WASD / arrows | Move |
-| Shift | Sprint (not while carrying the gun: it's heavy) |
 | Space | Jump (high enough to get onto a crate) |
 | Ctrl / C | Crouch: shorter and slower, so a crate hides you from gunmen |
 | Mouse | Look and aim |
@@ -45,8 +44,7 @@ The aim line shows where the shot or recall will go: orange for a shot, blue for
 
 ### How it plays
 
-- **Time slows down while both players stand still**, and runs at normal speed as soon as either of you moves. Enemies, bullets, enemy shots and thrown guns all crawl, and the screen drains to a cool grey while it lasts. Use it to plan a shot, line up a recall, or watch an enemy bullet coming.
-- **Enemies come in three kinds**, told apart by silhouette, belt colour and the badge over their head: **gunmen** (red, pistol; shoot from range, then take a while to reload), **swordsmen** (steel, long sword) and **brawlers** (lime, big fists). A badge flashes red with a **!** while that enemy winds up an attack.
+- **Enemies come in three kinds**, told apart by silhouette and colour (weapon and belt): **gunmen** (red, pistol; shoot from range, then take a while to reload), **swordsmen** (steel, long sword) and **brawlers** (lime, big fists). An enemy flashes white while it winds up an attack.
 - **Crates** are waist-high cover: crouch behind them, jump on them, and note that bullets stick in them like walls.
 - The **ATTEMPT** counter under TARGETS counts your tries at the current room; it resets when you clear it.
 
@@ -129,7 +127,6 @@ Pass these after `--`, for example `godot --path . -- --host`:
 | `--server` | Run as the dedicated online server (use with `--headless`). `--tls-dir=DIR` holds its key and certificate (made on first run; without it the WebSocket is unencrypted, for testing), `--ws-port=N` (default 443), `--ws-bind=ADDR` (default all) |
 | `--bot` | An autopilot plays your role (for testing) and logs events |
 | `--peaceful` | Host or server only: enemies chase but never attack |
-| `--no-slowmo` | Host or server only: time always runs at normal speed |
 | `--shots=DIR` | With `--bot`: save a screenshot every 0.5 s plus a room overview |
 | `--log` | Print gameplay events |
 | `--no-gl-fallback` | Don't switch to OpenGL on software rendering |
@@ -161,7 +158,6 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - Online play: `scripts/dual_server_peer.gd` lets the dedicated server accept UDP (ENet) and WebSocket players at the same time, and Godot's server relay passes messages between them. Clients try UDP for 2.5 s, then fall back to `wss://<server ip>:443`, trusting only the certificate in `assets/server.crt`. `server/` holds the EC2 setup script and guide.
 - `scripts/lan_discovery.gd`: LAN discovery. The host answers on UDP 7778 and broadcasts a beacon once a second until a partner joins. The lobby sends small queries to the broadcast addresses and directly to every address in its local /24 networks (about 200 a second); the answers are replies to its own packets, so they get through the joiner's firewall.
 - `scripts/room_gen.gd`: deterministic procedural room: walls, waist-high crates, enemies kept away from the spawn, always fully connected.
-- Slow motion: `scripts/clock.gd` holds the world's speed. The host decides it (both players still = slow) and sends it with every enemy update; each player also speeds time up the instant they move. Enemies, bullets, enemy shots, thrown guns and debris scale their time by it; players, aiming and networking never do.
 - `scripts/bullet.gd`, `gun.gd`, `enemy.gd`, `player.gd`: gameplay objects.
 - `scripts/hud.gd`, `hand.gd`, `lobby.gd`, `world_fx.gd`, `shaders/comic.gdshader`: the comic-print look (ink outlines, halftone, posterize, rewind tint).
 

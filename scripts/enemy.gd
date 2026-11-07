@@ -6,7 +6,6 @@ extends CharacterBody3D
 
 const RoomGen := preload("res://scripts/room_gen.gd")
 const Palette := preload("res://scripts/palette.gd")
-const Clock := preload("res://scripts/clock.gd")
 
 const LAYER_ENEMY := 2
 const MASK_WORLD := 1
@@ -201,11 +200,6 @@ func die() -> void:
 	set_process(false)
 
 
-## True during an attack wind-up (the HUD flashes this enemy's tag).
-func winding_up() -> bool:
-	return _flash > 0.0
-
-
 func alert() -> void:
 	_alerted = true
 
@@ -228,7 +222,7 @@ func apply_net_state(x: float, z: float, yaw: float) -> void:
 func _process(delta: float) -> void:
 	# Telegraph visuals run on every peer.
 	if _flash > 0.0:
-		_flash = maxf(_flash - delta * Clock.scale, 0.0)
+		_flash = maxf(_flash - delta, 0.0)
 		if kind != RoomGen.Kind.GUNMAN:
 			# Wind up: pull the weapon back and up.
 			_arm.rotation.x = ARM_REST[kind] + 0.8 * minf(_flash * 4.0, 1.0)
@@ -293,8 +287,7 @@ func _physics_process(delta: float) -> void:
 	_brain(delta)
 
 
-func _brain(real_delta: float) -> void:
-	var delta := real_delta * Clock.scale  # slow motion slows the brain too
+func _brain(delta: float) -> void:
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_think -= delta
 	if _think <= 0.0:
@@ -324,7 +317,6 @@ func _brain(real_delta: float) -> void:
 		else:
 			wish = _steer(delta, dist)
 	wish += _separation()
-	wish *= Clock.scale
 	velocity.x = wish.x
 	velocity.z = wish.z
 	velocity.y = 0.0

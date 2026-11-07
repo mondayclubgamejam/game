@@ -6,7 +6,6 @@ extends MultiMeshInstance3D
 signal hit_local
 
 const Palette := preload("res://scripts/palette.gd")
-const Clock := preload("res://scripts/clock.gd")
 
 const MAX := 24
 const SPEED := 85.0
@@ -59,7 +58,7 @@ func spawn(origin: Vector3, dir: Vector3, fast_forward: float) -> void:
 			_left[i] = RANGE
 			_active += 1
 			set_physics_process(true)
-			var t := fast_forward * Clock.scale
+			var t := fast_forward
 			while t >= STEP and _left[i] > 0.0:
 				_advance(i, STEP)
 				t -= STEP
@@ -69,7 +68,7 @@ func spawn(origin: Vector3, dir: Vector3, fast_forward: float) -> void:
 func _physics_process(delta: float) -> void:
 	for i in MAX:
 		if _left[i] > 0.0:
-			_advance(i, delta * Clock.scale)
+			_advance(i, delta)
 	if _active <= 0:
 		set_physics_process(false)
 

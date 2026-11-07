@@ -9,7 +9,6 @@ var _post: ShaderMaterial
 var _rewind := 0.0
 var _punch := 0.0
 var _rewind_time := 0.4
-var _slowmo := 0.0
 
 
 func _ready() -> void:
@@ -64,13 +63,6 @@ func rewind_flash(seconds: float) -> void:
 	_rewind = 1.0
 	_rewind_time = seconds
 	set_process(true)
-
-
-## 0 = normal time, 1 = full slow motion. Called every physics tick.
-func set_slowmo(amount: float) -> void:
-	if absf(amount - _slowmo) > 0.002:
-		_slowmo = amount
-		_post.set_shader_parameter("slowmo", amount)
 
 
 func punch() -> void:
