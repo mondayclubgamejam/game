@@ -11,7 +11,10 @@ render_mode unshaded, cull_disabled, depth_test_disabled, depth_draw_never, shad
 
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
 uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
+#if CURRENT_RENDERER == RENDERER_FORWARD_PLUS
+// Normal-based edges need Forward+; the OpenGL fallback inks depth edges only.
 uniform sampler2D normal_tex : hint_normal_roughness_texture, filter_nearest;
+#endif
 
 uniform vec3 ink : source_color = vec3(0.102, 0.063, 0.149);
 uniform vec3 cold_dark : source_color = vec3(0.05, 0.10, 0.26);
@@ -27,7 +30,12 @@ void vertex() {
 }
 
 float view_depth(vec2 uv, mat4 inv_proj) {
-	vec4 v = inv_proj * vec4(uv * 2.0 - 1.0, texture(depth_tex, uv).r, 1.0);
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+	float z = texture(depth_tex, uv).r * 2.0 - 1.0;  // OpenGL depth is -1..1 in NDC
+#else
+	float z = texture(depth_tex, uv).r;
+#endif
+	vec4 v = inv_proj * vec4(uv * 2.0 - 1.0, z, 1.0);
 	return -v.z / v.w;
 }
 
@@ -37,15 +45,19 @@ void fragment() {
 
 	// Edges: compare the centre against a + shaped neighbourhood.
 	float d = view_depth(uv, INV_PROJECTION_MATRIX);
-	vec3 n = texture(normal_tex, uv).xyz * 2.0 - 1.0;
 	float depth_edge = 0.0;
 	float normal_edge = 0.0;
 	vec2 offs[4] = vec2[](vec2(texel.x, 0.0), vec2(-texel.x, 0.0), vec2(0.0, texel.y), vec2(0.0, -texel.y));
+#if CURRENT_RENDERER == RENDERER_FORWARD_PLUS
+	vec3 n = texture(normal_tex, uv).xyz * 2.0 - 1.0;
+#endif
 	for (int i = 0; i < 4; i++) {
 		float dn = view_depth(uv + offs[i], INV_PROJECTION_MATRIX);
 		depth_edge = max(depth_edge, abs(dn - d) / max(min(dn, d), 0.01));
+#if CURRENT_RENDERER == RENDERER_FORWARD_PLUS
 		vec3 nn = texture(normal_tex, uv + offs[i]).xyz * 2.0 - 1.0;
 		normal_edge = max(normal_edge, 1.0 - dot(n, nn));
+#endif
 	}
 	float far = clamp(d / 70.0, 0.0, 1.0);
 	float edge = max(step(0.08 + far * 0.12, depth_edge), step(0.4, normal_edge));

@@ -35,6 +35,15 @@ Two windows on one machine work too.
 
 If you can't change the host's firewall (for example on a locked-down managed machine), let the other player host instead.
 
+### If something goes wrong
+
+| Problem | Fix |
+|---|---|
+| Mouse stuck in the window | Press **Esc** to free it |
+| The game won't close | `pkill -f OneGunOneBullet` (or `pkill -9 -f OneGunOneBullet`); on Windows, end it in Task Manager |
+| Frozen or very slow window | The game restarts itself on the lighter OpenGL renderer when it detects software (CPU) rendering. To force it: `./OneGunOneBullet.x86_64 --rendering-method gl_compatibility`. The OpenGL look is plainer (no ink outlines) |
+| Audio errors | The game has no sound yet and uses Godot's silent audio driver, so it never opens your sound device. If you still see audio errors, you're running an older build |
+
 ## Building an executable (Linux or Windows)
 
 | On | Run |
@@ -75,6 +84,7 @@ Pass these after `--`, for example `godot --path . -- --host`:
 | `--peaceful` | Host only: enemies chase but never attack |
 | `--shots=DIR` | With `--bot`: save a screenshot every 0.5 s plus a room overview |
 | `--log` | Print gameplay events |
+| `--no-gl-fallback` | Don't switch to OpenGL on software rendering |
 | `--quit-after=SECONDS` | Exit after a while |
 
 ## Testing

@@ -89,6 +89,8 @@ var _auto_join_lan := false
 
 
 func _ready() -> void:
+	if _relaunch_if_software_rendering():
+		return
 	process_physics_priority = 100  # run after the players have moved
 	_setup_input()
 	fx = WorldFx.new()
@@ -120,6 +122,27 @@ func _ready() -> void:
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
 	_parse_args()
+
+
+## Vulkan on the CPU (no proper GPU driver, common on managed or remote
+## machines) is too slow to play and can freeze. Restart on the much lighter
+## OpenGL renderer instead. Pass --no-gl-fallback to skip this.
+func _relaunch_if_software_rendering() -> bool:
+	if RenderingServer.get_current_rendering_method() != "forward_plus" \
+			or RenderingServer.get_video_adapter_type() != RenderingDevice.DEVICE_TYPE_CPU \
+			or OS.get_cmdline_user_args().has("--no-gl-fallback"):
+		return false
+	var args := OS.get_cmdline_args()
+	args.append_array(PackedStringArray(["--rendering-method", "gl_compatibility"]))
+	var user := OS.get_cmdline_user_args()
+	if not user.is_empty():
+		args.append("--")
+		args.append_array(user)
+	print("Software rendering (%s) detected: restarting with the OpenGL renderer." \
+		% RenderingServer.get_video_adapter_name())
+	OS.create_process(OS.get_executable_path(), args)
+	get_tree().quit()
+	return true
 
 
 func _parse_args() -> void:
