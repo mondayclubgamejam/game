@@ -1606,8 +1606,12 @@ func _physics_process(delta: float) -> void:
 ## moment they move themselves, without waiting for the host.
 func _update_clock(delta: float) -> void:
 	var target := 1.0
-	if _slowmo_enabled and phase == Phase.PLAYING:
-		if multiplayer.is_server():
+	# Only the host knows whether slow motion is on; everyone else follows the
+	# decision it sends (always 1.0 when it's off).
+	if phase == Phase.PLAYING:
+		if multiplayer.is_server() and not _slowmo_enabled:
+			target = 1.0
+		elif multiplayer.is_server():
 			var anyone_moving := false
 			for p in players.values():
 				if p.is_moving():
@@ -1622,6 +1626,8 @@ func _update_clock(delta: float) -> void:
 	var rate := SLOW_OUT_RATE if target > Clock.scale else SLOW_IN_RATE
 	var was_slow := Clock.scale < 0.6
 	Clock.scale = move_toward(Clock.scale, target, rate * delta)
+	if was_slow != (Clock.scale < 0.6):
+		_log_event("clock %s (%.2f)" % ["slow" if Clock.scale < 0.6 else "normal", Clock.scale])
 	if not was_slow and Clock.scale < 0.6 and local_player != null:
 		hud.banner("TIME SLOWS", Hud.SLOW_COLOR)  # big cut-in the moment it kicks in
 	fx.set_slowmo(inverse_lerp(1.0, Clock.SLOW, Clock.scale))

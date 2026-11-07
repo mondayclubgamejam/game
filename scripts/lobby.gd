@@ -480,6 +480,17 @@ func _build_menu() -> void:
 		_show_page(_join)
 		_set_message("", false)))
 
+	# EXIT, bottom right.
+	var fill := Control.new()
+	fill.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_menu.add_child(fill)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_END
+	_menu.add_child(row)
+	row.add_child(_small_button("EXIT", Palette.DANGER, func():
+		_save_settings()
+		get_tree().quit()))
+
 
 func _build_join() -> void:
 	var head := HBoxContainer.new()
