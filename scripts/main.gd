@@ -66,6 +66,7 @@ const TUT_STEPS := [
 ]
 ## Tutorial B: the step that wakes each enemy group.
 const TUT_WAKE := {1: 1, 2: 3, 3: 5}
+const TUT_BANNER_HOLD := 2.5   ## tutorial B's banners stay up long enough to read
 const MASK_WORLD := 1
 const MASK_ENEMY := 2
 const MASK_PLAYER := 4
@@ -1008,7 +1009,10 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 	if mode == "endless":
 		hud.room_no = number
 		hud.best = Lobby.record_endless(team.size(), number)
-	hud.banner(Maps.display_name(mode) if Maps.is_fixed(mode) else "ROOM %d" % number, Palette.SIGNAL)
+	if mode == "tutorial_b":
+		_step_banner()
+	else:
+		hud.banner(Maps.display_name(mode) if Maps.is_fixed(mode) else "ROOM %d" % number, Palette.SIGNAL)
 	if not _bot_mode:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -1051,7 +1055,10 @@ func _later(seconds: float, fn: Callable) -> void:
 func room_cleared() -> void:
 	phase = Phase.OVER
 	_round_end = "cleared"
-	hud.banner("TRAINING COMPLETE" if Maps.is_tutorial(_round_mode) else "CLEAR!", Palette.ENEMY)
+	if Maps.is_tutorial(_round_mode):
+		hud.banner("TRAINING COMPLETE", Palette.ENEMY, TUT_BANNER_HOLD)
+	else:
+		hud.banner("CLEAR!", Palette.ENEMY)
 	_log_event("room cleared")
 	if Maps.is_fixed(_round_mode):
 		# A hand-made map is done once it's cleared: back to the match lobby.
@@ -1760,8 +1767,12 @@ func tutorial_step(step: int) -> void:
 		var group: int = room.enemy_groups[i]
 		if group > 0 and TUT_WAKE[group] == step:
 			enemies[i].set_active(true)
-	hud.banner("STEP %d  ·  %s" % [step + 1, TUT_STEPS[step][0]], Palette.SIGNAL)
+	_step_banner()
 	_log_event("tutorial step %d" % step)
+
+
+func _step_banner() -> void:
+	hud.banner("STEP %d  ·  %s" % [_tut_step + 1, TUT_STEPS[_tut_step][0]], Palette.SIGNAL, TUT_BANNER_HOLD)
 
 
 func _update_tutorial_hud() -> void:

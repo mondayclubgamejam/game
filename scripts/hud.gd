@@ -42,8 +42,9 @@ func _process(_delta: float) -> void:
 	queue_redraw()
 
 
-func banner(text: String, color: Color) -> void:
-	_banner_queue.append([text, color])
+## `hold`: seconds the banner stays put between sliding in and out.
+func banner(text: String, color: Color, hold := 0.55) -> void:
+	_banner_queue.append([text, color, hold])
 	if _banner_tween == null or not _banner_tween.is_running():
 		_next_banner()
 
@@ -64,7 +65,7 @@ func _next_banner() -> void:
 	_banner_x = -1.6
 	_banner_tween = create_tween()
 	_banner_tween.tween_property(self, "_banner_x", 0.0, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	_banner_tween.tween_interval(0.55)
+	_banner_tween.tween_interval(item[2])
 	_banner_tween.tween_property(self, "_banner_x", 1.6, 0.14).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	_banner_tween.tween_callback(_next_banner)
 

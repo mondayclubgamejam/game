@@ -30,7 +30,7 @@ const MAX_PLAYERS := 4
 ## The map grid in the match lobby, 3 x 3, read left to right, top to bottom.
 ## Only maps marked ready can be picked; the rest are still being made.
 const MAPS := [
-	# Preview build: the tile switches between tutorial A and B when clicked again.
+	# Two tutorials: the tile picks A (free practice); clicking again switches to B (training course).
 	{"id": "tutorial", "name": "TUTORIAL", "sub": "LEARN THE LOOP", "ready": true},
 	{"id": "random", "name": "RANDOM", "sub": "A NEW ROOM EVERY TIME", "ready": true},
 	{"id": "endless", "name": "ENDLESS", "sub": "HOW FAR CAN YOU GET?", "ready": true},
