@@ -56,7 +56,7 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Network protocol version. Bump it whenever an RPC's arguments change, so
 ## mismatched builds refuse each other with a clear message instead of
 ## failing on individual RPCs.
-const PROTOCOL := 8
+const PROTOCOL := 9
 const MAX_PLAYERS := 4
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
@@ -109,6 +109,7 @@ var _bot_mode := false
 var _net_role := "offline"
 var _auto_join_lan := false
 var _slowmo_enabled := false   ## host: chosen in the match lobby (off by default)
+var _map_id := Lobby.DEFAULT_MAP  ## host: chosen in the match lobby
 var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
 var _party := {}               ## host: match lobby members, peer id -> {name, role, ready}
 var _party_order: Array[int] = []
@@ -172,6 +173,7 @@ func _ready() -> void:
 	lobby.ready_toggled.connect(func(ready: bool): _to_host("party_ready", [ready]))
 	lobby.slowmo_toggled.connect(func(on: bool): _to_host("party_set_slowmo", [on]))
 	lobby.move_requested.connect(func(id: int, role: int): _to_host("party_move", [id, role]))
+	lobby.map_chosen.connect(func(id: String): _to_host("party_set_map", [id]))
 
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -571,7 +573,7 @@ func _party_broadcast(note: String) -> void:
 	var info := "NEW GAME"
 	if _party_resume:
 		info = "ROOM %d  ·  ATTEMPT %d  ·  SAME MAP" % [room_no, _resume_attempt()]
-	party_state.rpc(members, info, note, _slowmo_enabled, _party_leader())
+	party_state.rpc(members, info, note, _slowmo_enabled, _party_leader(), _map_id)
 
 
 ## Host -> a new client: which protocol the host speaks.
@@ -667,6 +669,18 @@ func party_set_slowmo(on: bool) -> void:
 	_party_broadcast("The host turned time slowing %s." % ("on" if on else "off"))
 
 
+## The host picks the map (only maps that are ready to play).
+@rpc("any_peer", "call_remote", "reliable")
+func party_set_map(id: String) -> void:
+	if not multiplayer.is_server() or _sender() != _party_leader() or phase != Phase.LOBBY \
+			or not Lobby.map_available(id) or id == _map_id:
+		return
+	_map_id = id
+	for m in _party.values():
+		m["ready"] = false
+	_party_broadcast("")
+
+
 ## Either player, in game: everyone back to the match lobby, same room.
 @rpc("any_peer", "call_remote", "reliable")
 func request_party() -> void:
@@ -707,7 +721,7 @@ func _party_start() -> void:
 
 ## Host -> everyone: the match lobby as it stands. Leaves any running round.
 @rpc("authority", "call_local", "reliable")
-func party_state(members: Array, info: String, note: String, slowmo: bool, leader: int) -> void:
+func party_state(members: Array, info: String, note: String, slowmo: bool, leader: int, map_id: String) -> void:
 	if _dedicated:
 		return
 	if phase != Phase.LOBBY:
@@ -721,7 +735,7 @@ func party_state(members: Array, info: String, note: String, slowmo: bool, leade
 	var list := []
 	for m in members:
 		list.append({"id": m[0], "name": m[1], "role": m[2], "ready": m[3]})
-	lobby.show_party(list, multiplayer.get_unique_id(), leader, info, slowmo, note)
+	lobby.show_party(list, multiplayer.get_unique_id(), leader, info, slowmo, map_id, note)
 	_log_event("match lobby: %s" % [members])
 	# The test bot readies up as soon as it has company.
 	if _bot_mode and members.size() >= _bot_wait_players:

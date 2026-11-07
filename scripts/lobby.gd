@@ -12,6 +12,7 @@ signal online_requested(address: String)
 signal join_page(opened: bool)        ## the network scan only runs while this page is open
 signal role_chosen(role: int)        ## join a column
 signal move_requested(id: int, role: int)  ## host: move someone to a column
+signal map_chosen(id: String)              ## host: pick the map
 signal ready_toggled(ready: bool)
 signal slowmo_toggled(on: bool)
 
@@ -23,6 +24,27 @@ const PAPER := Color("f3e9d2")
 const SETTINGS := "user://settings.cfg"
 const READY_COLOR := Color("9bff3a")
 const MAX_PLAYERS := 4
+## The map grid in the match lobby, 3 x 3, read left to right, top to bottom.
+## Only maps marked ready can be picked; the rest are still being made.
+const MAPS := [
+	{"id": "tutorial", "name": "TUTORIAL", "sub": "LEARN THE LOOP", "ready": false},
+	{"id": "random", "name": "RANDOM", "sub": "A NEW ROOM EVERY TIME", "ready": true},
+	{"id": "endless", "name": "ENDLESS", "sub": "HOW FAR CAN YOU GET?", "ready": false},
+	{"id": "", "name": "", "sub": "", "ready": false},
+	{"id": "", "name": "", "sub": "", "ready": false},
+	{"id": "", "name": "", "sub": "", "ready": false},
+	{"id": "", "name": "", "sub": "", "ready": false},
+	{"id": "", "name": "", "sub": "", "ready": false},
+	{"id": "", "name": "", "sub": "", "ready": false},
+]
+const DEFAULT_MAP := "random"
+
+
+static func map_available(id: String) -> bool:
+	for m in MAPS:
+		if m["id"] == id:
+			return m["ready"]
+	return false
 
 var _pages: Array[Control] = []
 var _menu: VBoxContainer
@@ -46,6 +68,11 @@ var _join_buttons: Array[Button] = []
 var _party_status: Label
 var _options_heading: Label
 var _leader := 0
+var _title_node: Control
+var _maps_node: Control
+var _map_heading: Label
+var _map_tiles: Array[Button] = []
+var _host_label: Label
 var _ready_button: Button
 var _my_ready := false
 var _slowmo_button: Button
@@ -71,6 +98,7 @@ func _ready() -> void:
 	add_child(bg)
 
 	_build_title()
+	_build_maps()
 	_build_panel()
 	_build_message_strip()
 	_load_settings()
@@ -122,12 +150,18 @@ func show_busy(text: String, note := "") -> void:
 ## The match lobby. `members`: [{id, name, role (0 normal / 1 inverted), ready}].
 ## Players pick a column; the host (`leader`) can also move anyone, and is
 ## the only one who sees the match options.
-func show_party(members: Array, my_id: int, leader: int, info: String, slowmo: bool, note := "") -> void:
+func show_party(members: Array, my_id: int, leader: int, info: String, slowmo: bool, map_id: String,
+		note := "") -> void:
 	if not _party.visible:
 		_show_page(_party)
 	_leader = leader
 	var is_host := my_id == leader
 	_party_info.text = info
+	_host_label.text = ""
+	for m in members:
+		if m["id"] == leader:
+			_host_label.text = "HOST  ·  %s" % m["name"]
+	_show_maps(map_id, is_host)
 	var my_role := -1
 	var counts := [0, 0]
 	for m in members:
@@ -159,22 +193,17 @@ func show_party(members: Array, my_id: int, leader: int, info: String, slowmo: b
 	_options_heading.visible = is_host
 	_slowmo_button.visible = is_host
 	var can_start: bool = members.size() >= 2 and counts[0] > 0 and counts[1] > 0
-	_ready_button.disabled = not can_start
-	_ready_button.text = "READY!" if _my_ready else ("I'M READY" if can_start else "WAITING")
-	_ready_button.add_theme_stylebox_override("normal", _slanted(READY_COLOR if _my_ready else Palette.MUTED))
+	_ready_button.disabled = not can_start and not _my_ready
+	_ready_button.text = "CANCEL" if _my_ready else "READY UP"
+	_ready_button.add_theme_stylebox_override("normal", _slanted(Palette.MUTED if _my_ready else READY_COLOR))
+	_ready_button.add_theme_stylebox_override("hover", _slanted((Palette.MUTED if _my_ready else READY_COLOR).lightened(0.15)))
 	_set_message(note, false)
 
 
-## A player in a column: name, then YOU / HOST / READY underneath. For the
-## host, other players' cards are buttons that move them to the other column.
+## A player in a column: "NAME (YOU)", then READY / NOT READY underneath.
+## For the host, other players' cards are buttons that move them across.
 func _player_card(m: Dictionary, my_id: int, is_host: bool) -> Button:
 	var role: int = m["role"]
-	var tags := []
-	if m["id"] == my_id:
-		tags.append("YOU")
-	if m["id"] == _leader:
-		tags.append("HOST")
-	tags.append("READY" if m["ready"] else "NOT READY")
 	var b := Button.new()
 	b.custom_minimum_size.y = 50
 	b.focus_mode = Control.FOCUS_NONE
@@ -189,10 +218,11 @@ func _player_card(m: Dictionary, my_id: int, is_host: bool) -> Button:
 	box.alignment = BoxContainer.ALIGNMENT_CENTER
 	box.add_theme_constant_override("separation", -6)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var name_label := _label(str(m["name"]), 20, Color.WHITE, 5, Vector2.ZERO)
+	var name_label := _label(str(m["name"]) + ("  (YOU)" if m["id"] == my_id else ""), 20, Color.WHITE, 5, Vector2.ZERO)
 	name_label.clip_text = true
 	box.add_child(name_label)
-	box.add_child(_label("  ·  ".join(tags), 13, READY_COLOR.darkened(0.45) if m["ready"] else Palette.INK, 0, Vector2.ZERO))
+	box.add_child(_label("READY" if m["ready"] else "NOT READY", 13,
+		READY_COLOR.darkened(0.45) if m["ready"] else Palette.INK, 0, Vector2.ZERO))
 	b.add_child(box)
 	var movable: bool = is_host and m["id"] != my_id
 	b.disabled = not movable
@@ -225,6 +255,7 @@ func set_lan_hosts(hosts: Array) -> void:
 
 func _build_title() -> void:
 	var title := Control.new()
+	_title_node = title
 	title.position = Vector2(70, 120)
 	title.rotation = -0.1
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -241,6 +272,72 @@ func _build_title() -> void:
 	title.add_child(_label("TWO PLAYERS.  ONE BULLET.  TIME RUNS BOTH WAYS.", 22, Color.WHITE, 6, Vector2(48, 300)))
 	title.add_child(_label("NORMAL  ·  FIRE", 26, Palette.FORWARD, 7, Vector2(48, 344)))
 	title.add_child(_label("INVERTED  ·  RECALL", 26, Palette.REVERSE, 7, Vector2(240, 344)))
+
+
+## The 3 x 3 map grid shown on the left of the match lobby.
+func _build_maps() -> void:
+	_maps_node = Control.new()
+	_maps_node.position = Vector2(46, 44)
+	_maps_node.visible = false
+	add_child(_maps_node)
+	_map_heading = _label("MAP", 34, Palette.SIGNAL, 8, Vector2(8, 0))
+	_maps_node.add_child(_map_heading)
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.position = Vector2(0, 58)
+	grid.add_theme_constant_override("h_separation", 12)
+	grid.add_theme_constant_override("v_separation", 12)
+	_maps_node.add_child(grid)
+	for i in MAPS.size():
+		var m: Dictionary = MAPS[i]
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(196, 150)
+		b.focus_mode = Control.FOCUS_NONE
+		var box := VBoxContainer.new()
+		box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		box.offset_left = 22
+		box.offset_right = -12
+		box.alignment = BoxContainer.ALIGNMENT_CENTER
+		box.add_theme_constant_override("separation", 0)
+		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		box.add_child(_label(m["name"] if m["name"] != "" else "?", 30, Color.WHITE, 7, Vector2.ZERO))
+		var sub := _label("", 13, Palette.INK, 0, Vector2.ZERO)
+		sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		box.add_child(sub)
+		b.add_child(box)
+		var id: String = m["id"]
+		b.pressed.connect(func(): map_chosen.emit(id))
+		grid.add_child(b)
+		_map_tiles.append(b)
+
+
+## Highlights the chosen map; only the host can click ready maps.
+func _show_maps(selected: String, is_host: bool) -> void:
+	_map_heading.text = "MAP" if is_host else "MAP  ·  THE HOST PICKS"
+	for i in MAPS.size():
+		var m: Dictionary = MAPS[i]
+		var b := _map_tiles[i]
+		var sub: Label = b.get_child(0).get_child(1)
+		var picked: bool = m["id"] == selected and m["id"] != ""
+		var fill: Color
+		if picked:
+			fill = Palette.SIGNAL
+			sub.text = "SELECTED  ·  " + m["sub"]
+		elif m["ready"]:
+			fill = Palette.SIGNAL.darkened(0.45)
+			sub.text = m["sub"]
+		elif m["id"] != "":
+			fill = Palette.MUTED.darkened(0.3)
+			sub.text = "COMING SOON"
+		else:
+			fill = Palette.INK.lightened(0.12)
+			sub.text = ""
+		var style := _slanted(fill, 6 if picked else 4, Color.WHITE if picked else Palette.INK)
+		for state in ["normal", "disabled", "pressed"]:
+			b.add_theme_stylebox_override(state, style)
+		b.add_theme_stylebox_override("hover", _slanted(fill.lightened(0.15), 6 if picked else 4,
+			Color.WHITE if picked else Palette.INK))
+		b.disabled = not (is_host and m["ready"]) or picked
 
 
 func _build_panel() -> void:
@@ -286,6 +383,9 @@ func _show_page(page: Control) -> void:
 	var was_join := _join.visible
 	for p in _pages:
 		p.visible = p == page
+	# In the match lobby the map grid takes the title's place.
+	_title_node.visible = page != _party
+	_maps_node.visible = page == _party
 	if was_join != _join.visible:
 		join_page.emit(_join.visible)
 
@@ -376,7 +476,15 @@ func _build_wait() -> void:
 
 func _build_party() -> void:
 	_party.add_theme_constant_override("separation", 8)
-	_party.add_child(_label("MATCH LOBBY", 44, Palette.SIGNAL, 9, Vector2.ZERO))
+	var header := HBoxContainer.new()
+	_party.add_child(header)
+	header.add_child(_label("MATCH LOBBY", 44, Palette.SIGNAL, 9, Vector2.ZERO))
+	var gap := Control.new()
+	gap.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(gap)
+	_host_label = _label("", 18, Color.WHITE, 5, Vector2.ZERO)
+	_host_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	header.add_child(_host_label)
 	_party_info = _heading("", Palette.MUTED.lightened(0.5))
 	_party.add_child(_party_info)
 
