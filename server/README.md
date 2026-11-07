@@ -1,4 +1,4 @@
-# Running the online server (AWS EC2)
+# Running the Super Tenet online server (AWS EC2)
 
 The online server lets two players meet through the internet instead of the
 local network. Both players only make **outgoing** connections, so it works
@@ -57,14 +57,14 @@ script to the instance (`IP` is the instance's public or Elastic IP):
 
 ```sh
 tools/build.sh -target linux
-scp -i my-key.pem build/linux/OneGunOneBullet.x86_64 server/setup.sh ubuntu@IP:
+scp -i my-key.pem build/linux/SuperTenet.x86_64 server/setup.sh ubuntu@IP:
 ssh -i my-key.pem ubuntu@IP
 ```
 
 Then, on the instance:
 
 ```sh
-sudo bash setup.sh ./OneGunOneBullet.x86_64
+sudo bash setup.sh ./SuperTenet.x86_64
 ```
 
 That installs the game as a service that starts on boot and restarts if it

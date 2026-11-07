@@ -1,10 +1,10 @@
-// Command onegun-build builds One Gun One Bullet into a single self-contained
+// Command onegun-build builds Super Tenet into a single self-contained
 // executable for Linux or Windows.
 //
 //	onegun-build                  build for the OS you're on
 //	onegun-build -target windows  or: linux, all
 //
-// Outputs build/linux/OneGunOneBullet.x86_64 and build/windows/OneGunOneBullet.exe.
+// Outputs build/linux/SuperTenet.x86_64 and build/windows/SuperTenet.exe.
 //
 // It has no runtime dependencies (no Python, unzip or curl). Godot comes from
 // $GODOT, or from PATH if it is 4.7.x; otherwise the official Godot 4.7.2 is
@@ -42,8 +42,8 @@ type target struct {
 }
 
 var targets = map[string]target{
-	"linux":   {"Linux", "linux_release.x86_64", filepath.Join("build", "linux", "OneGunOneBullet.x86_64")},
-	"windows": {"Windows Desktop", "windows_release_x86_64.exe", filepath.Join("build", "windows", "OneGunOneBullet.exe")},
+	"linux":   {"Linux", "linux_release.x86_64", filepath.Join("build", "linux", "SuperTenet.x86_64")},
+	"windows": {"Windows Desktop", "windows_release_x86_64.exe", filepath.Join("build", "windows", "SuperTenet.exe")},
 }
 
 // Godot editor downloads that can run the export, by GOOS/GOARCH of this machine.

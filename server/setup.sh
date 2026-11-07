@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# Sets up (or updates) the One Gun One Bullet server on a fresh Ubuntu 24.04
+# Sets up (or updates) the Super Tenet server on a fresh Ubuntu 24.04
 # machine, such as an AWS EC2 instance. Safe to run again to update the game.
 #
-#   sudo bash setup.sh <path to OneGunOneBullet.x86_64>
+#   sudo bash setup.sh <path to SuperTenet.x86_64>
 #
 # Players connect by this machine's public IP address:
 #   - UDP 7777 for players whose network allows UDP (lowest latency)
@@ -32,8 +32,9 @@ APP=/opt/onegun
 echo "==> Installing the game server into $APP"
 id onegun >/dev/null 2>&1 || useradd --system --home-dir "$APP/home" --shell /usr/sbin/nologin onegun
 mkdir -p "$APP/home" "$APP/tls"
-install -m 0755 "$BINARY" "$APP/OneGunOneBullet.x86_64.new"
-mv -f "$APP/OneGunOneBullet.x86_64.new" "$APP/OneGunOneBullet.x86_64"
+install -m 0755 "$BINARY" "$APP/SuperTenet.x86_64.new"
+mv -f "$APP/SuperTenet.x86_64.new" "$APP/SuperTenet.x86_64"
+rm -f "$APP/OneGunOneBullet.x86_64"  # the game's old name
 chown -R onegun:onegun "$APP"
 chmod 700 "$APP/tls"
 
@@ -41,14 +42,14 @@ chmod 700 "$APP/tls"
 # running as root.
 cat > /etc/systemd/system/onegun.service <<EOF
 [Unit]
-Description=One Gun One Bullet game server
+Description=Super Tenet game server
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 User=onegun
 Environment=HOME=$APP/home
-ExecStart=$APP/OneGunOneBullet.x86_64 --headless -- --server --port=7777 --ws-port=443 --tls-dir=$APP/tls
+ExecStart=$APP/SuperTenet.x86_64 --headless -- --server --port=7777 --ws-port=443 --tls-dir=$APP/tls
 Restart=always
 RestartSec=2
 AmbientCapabilities=CAP_NET_BIND_SERVICE

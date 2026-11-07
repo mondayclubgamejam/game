@@ -1,4 +1,4 @@
-# One Gun, One Bullet
+# Super Tenet
 
 Monday Club game jam project, built with [Godot 4.7](https://godotengine.org/).
 
@@ -30,7 +30,7 @@ Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs
 | Right click / Q | Throw the gun (aims itself at your partner when they're near the crosshair) |
 | Walk into the gun | Catch it in the air or pick it up off the floor |
 | R | Restart the room |
-| Esc | Free the mouse |
+| Esc | Pause menu: resume, change roles, leave the match, quit |
 
 The aim line shows where the shot or recall will go: orange for a shot, blue for a recall, **red** when it's blocked by a wall or would hit your partner. Enemies on the path light up yellow.
 
@@ -43,14 +43,21 @@ The aim line shows where the shot or recall will go: orange for a shot, blue for
 
 ### Playing online (eduroam, managed machines)
 
-Put the server's **IP address** in **SERVER** and click **PLAY ONLINE**. Both players do this; the match starts when the second one connects. Nobody needs firewall changes or admin rights: both players only make outgoing connections to the server, over UDP when the network allows it and over HTTPS (port 443) when it doesn't. The HTTPS route checks the server against `assets/server.crt`, its certificate built into the game. Setting up the server on AWS EC2 is in [`server/README.md`](server/README.md).
+Put the server's **IP address** in **SERVER** and click **PLAY ONLINE**. Both players do this and meet in the **match lobby**. Nobody needs firewall changes or admin rights: both players only make outgoing connections to the server, over UDP when the network allows it and over HTTPS (port 443) when it doesn't. The HTTPS route checks the server against `assets/server.crt`, its certificate built into the game. Setting up the server on AWS EC2 is in [`server/README.md`](server/README.md).
+
+### The match lobby
+
+Once two players are connected (on the LAN or online) they meet in the **match lobby**: each sees the other's name, **picks a role** (picking your partner's role swaps you) and clicks **I'M READY**. The room starts when both are ready.
+
+In game, **Esc → CHANGE ROLES** takes both players back to the match lobby. You return to **the same room**, and the attempt count doesn't go up for the trip (a death that just happened still counts). **LEAVE MATCH** goes back to the title screen; if you were hosting on the LAN, your game stays open for a new partner.
+
+Both players must run the same build. If they don't (for example, the server wasn't updated), the game refuses the connection and says which versions it saw.
 
 ### Playing together on the same network
 
 
 - One player clicks **HOST A GAME**. The hosting screen shows their address and, if needed, the exact firewall command for their machine.
-- On the same network, the other player sees **JOIN <NAME>** appear under *Games on your network* within a second or two, and clicks it.
-- Otherwise, type the host's address under *Or join by address* (`192.168.0.12`, or `192.168.0.12:7777`). Over the internet, the host forwards UDP port **7777**.
+- The other clicks **JOIN A GAME**: the host appears under *Games on your network* within a second or two (the network is only scanned while this page is open). Or type the host's address under *Or join by address* (`192.168.0.12`, or `192.168.0.12:7777`). Over the internet, the host forwards UDP port **7777**.
 
 Two windows on one machine work too.
 
@@ -69,8 +76,8 @@ If you can't change the host's firewall (for example on a locked-down managed ma
 | Problem | Fix |
 |---|---|
 | Mouse stuck in the window | Press **Esc** to free it |
-| The game won't close | `pkill -f OneGunOneBullet` (or `pkill -9 -f OneGunOneBullet`); on Windows, end it in Task Manager |
-| Frozen or very slow window | The game restarts itself on the lighter OpenGL renderer when it detects software (CPU) rendering. To force it: `./OneGunOneBullet.x86_64 --rendering-method gl_compatibility`. The OpenGL look is plainer (no ink outlines) |
+| The game won't close | `pkill -f SuperTenet` (or `pkill -9 -f SuperTenet`); on Windows, end it in Task Manager |
+| Frozen or very slow window | The game restarts itself on the lighter OpenGL renderer when it detects software (CPU) rendering. To force it: `./SuperTenet.x86_64 --rendering-method gl_compatibility`. The OpenGL look is plainer (no ink outlines) |
 | Audio errors | The game has no sound yet and uses Godot's silent audio driver, so it never opens your sound device. If you still see audio errors, you're running an older build |
 
 ## Building an executable (Linux or Windows)
@@ -84,8 +91,8 @@ The build works out which OS you're on and builds for it:
 
 | Output | Runs on |
 |---|---|
-| `build/linux/OneGunOneBullet.x86_64` | 64-bit Linux |
-| `build/windows/OneGunOneBullet.exe` | 64-bit Windows |
+| `build/linux/SuperTenet.x86_64` | 64-bit Linux |
+| `build/windows/SuperTenet.exe` | 64-bit Windows |
 
 Each is a **single self-contained file** with the game packed inside (about 75 MB on Linux, 110 MB on Windows). **Running it needs nothing else, not even Godot**: copy it over and run it (on Linux, `chmod +x` it first if needed). To build for the other OS too, pass `-target windows`, `-target linux` or `-target all`; either OS can build both.
 
@@ -118,6 +125,7 @@ Pass these after `--`, for example `godot --path . -- --host`:
 | `--log` | Print gameplay events |
 | `--no-gl-fallback` | Don't switch to OpenGL on software rendering |
 | `--quit-after=SECONDS` | Exit after a while |
+| `--swap-after=SECONDS` | With `--bot`: ask to change roles after a while, then take the other role (testing) |
 
 ## Testing
 

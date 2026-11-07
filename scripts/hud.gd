@@ -120,8 +120,8 @@ func _draw() -> void:
 ## drawn in ink. It flashes red and grows while the enemy winds up an attack.
 func _draw_enemy_tag(c: Vector2, kind: int, winding: bool, sc: float) -> void:
 	var r := 17.0 * sc * (1.35 if winding else 1.0)
-	if r < 3.0 or not c.is_finite():
-		return  # too small to read, or no valid screen position (e.g. no window)
+	if r < 3.0 or not c.is_finite() or not Rect2(Vector2.ZERO, size).grow(60.0).has_point(c):
+		return  # too small, or off screen (points near the camera plane project far away)
 	var col: Color = Palette.KIND_COLORS[kind]
 	if winding and int(Time.get_ticks_msec() / 90) % 2 == 0:
 		col = Palette.DANGER

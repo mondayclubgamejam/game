@@ -34,6 +34,7 @@ const Bot := preload("res://scripts/bot.gd")
 const LanDiscovery := preload("res://scripts/lan_discovery.gd")
 const DualServerPeer := preload("res://scripts/dual_server_peer.gd")
 const Clock := preload("res://scripts/clock.gd")
+const PauseMenu := preload("res://scripts/pause_menu.gd")
 
 enum Phase { LOBBY, PLAYING, OVER }
 
@@ -52,6 +53,10 @@ const MASK_WORLD := 1
 const MASK_ENEMY := 2
 const MASK_PLAYER := 4
 const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
+## Network protocol version. Bump it whenever an RPC's arguments change, so
+## mismatched builds refuse each other with a clear message instead of
+## failing on individual RPCs.
+const PROTOCOL := 4
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
 const SERVER_NAME := "one-gun-one-bullet"       ## the name inside that certificate
@@ -87,6 +92,7 @@ var tracers: Tracers
 var debris: Debris
 var aim_line: AimLine
 var lan: LanDiscovery
+var pause: PauseMenu
 
 var _claim_pending := false
 var _action_kills := 0
@@ -105,11 +111,16 @@ var _net_role := "offline"
 var _auto_join_lan := false
 var _slowmo_enabled := true
 var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
+var _party := {}               ## host: match lobby members, peer id -> {name, role, ready}
+var _party_order: Array[int] = []
+var _party_resume := false     ## host: the next start continues the current room
+var _round_end := ""           ## host: "", "died" or "cleared": how the current round ended
+var _hosting_args: Array = []  ## LAN host: what the hosting screen shows, to show it again
+var _bot_swap_pending := false ## test bot: swap roles at the next match lobby
 var _tag_seen := {}            ## enemy -> visible from here (refreshed a few per frame)
 var _tag_i := 0
 var _dedicated := false        ## this process is a --server
 var _relayed := false          ## this client plays through a dedicated server
-var _queue: Array[int] = []    ## server: connected players, in join order
 var _conn_stage := ""          ## client: "", "udp" or "ws" while connecting online
 var _conn_attempt := 0
 var _online_ws_url := ""
@@ -136,14 +147,28 @@ func _ready() -> void:
 	ui.add_child(lobby)
 	lobby.host_requested.connect(host_game)
 	lobby.join_requested.connect(join_game)
+	pause = PauseMenu.new()
+	ui.add_child(pause)
+	pause.resume_requested.connect(_close_pause)
+	pause.roles_requested.connect(func():
+		_close_pause(false)
+		_to_host("request_party"))
+	pause.leave_requested.connect(func(): _back_to_lobby("", false))
+	pause.quit_requested.connect(func(): get_tree().quit())
 
 	lan = LanDiscovery.new()
 	add_child(lan)
 	lan.hosts_changed.connect(_on_lan_hosts)
 	lobby.cancel_requested.connect(func(): _back_to_lobby("", false))
 	lobby.online_requested.connect(join_online)
-	if not OS.get_cmdline_user_args().has("--server"):
-		_search_lan()
+	# Scan the network only while the JOIN A GAME page is open.
+	lobby.join_page.connect(func(opened: bool):
+		if opened:
+			_search_lan()
+		else:
+			lan.stop_searching())
+	lobby.role_chosen.connect(func(role: int): _to_host("party_pick", [role]))
+	lobby.ready_toggled.connect(func(ready: bool): _to_host("party_ready", [ready]))
 
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -199,6 +224,7 @@ func _parse_args() -> void:
 			tls_dir = arg.trim_prefix("--tls-dir=")  # server: where its key and certificate live
 		elif arg == "--join=lan":
 			_auto_join_lan = true  # join the first game found on the LAN
+			_search_lan()
 		elif arg.begins_with("--join="):
 			join = arg.trim_prefix("--join=")
 		elif arg.begins_with("--port="):
@@ -215,6 +241,12 @@ func _parse_args() -> void:
 			var bot := Bot.new()
 			bot.game = self
 			add_child(bot)
+		elif arg.begins_with("--swap-after="):
+			# Test bot: ask to change roles after this many seconds of play.
+			var after := arg.trim_prefix("--swap-after=").to_float()
+			get_tree().create_timer(after).timeout.connect(func():
+				_bot_swap_pending = true
+				_to_host("request_party"))
 		elif arg.begins_with("--shots="):
 			for child in get_children():
 				if child is Bot:
@@ -244,7 +276,10 @@ func host_game(port: int) -> void:
 	_net_role = "host"
 	lan.stop_searching()
 	var answering := lan.start_advertising(port, lobby.player_name())
-	lobby.show_hosting(port, LanDiscovery.best_addresses(), _firewall_hint(port), answering)
+	_hosting_args = [port, LanDiscovery.best_addresses(), _firewall_hint(port), answering]
+	lobby.show_hosting(port, _hosting_args[1], _hosting_args[2], answering)
+	_party_reset()
+	_party_add(multiplayer.get_unique_id(), lobby.player_name())
 	_log_event("hosting on port %d" % port)
 
 
@@ -279,17 +314,22 @@ func join_game(address: String, port: int) -> void:
 
 
 func _on_peer_connected(id: int) -> void:
+	if multiplayer.is_server():
+		welcome.rpc_id(id, PROTOCOL)
 	if _dedicated:
 		_server_on_join(id)
 	elif multiplayer.is_server() and phase == Phase.LOBBY:
 		_log_event("partner %d joined" % id)
-		start_round.rpc(_new_seed(), 1, 1, multiplayer.get_unique_id(), id)
+		lan.stop_advertising()  # one partner per game
+		_party_add(id, "PLAYER")
+		_party_broadcast("")
 
 
 func _on_connected() -> void:
 	var via: String = {"udp": "UDP", "ws": "WebSocket"}.get(_conn_stage, "UDP")
 	_conn_stage = ""
-	lobby.show_busy("CONNECTED. WAITING FOR A PARTNER" if _relayed else "CONNECTED. STARTING")
+	lobby.show_busy("CONNECTED")
+	party_hello.rpc_id(1, lobby.player_name(), PROTOCOL)
 	_log_event("connected as %d via %s" % [multiplayer.get_unique_id(), via])
 
 
@@ -320,7 +360,7 @@ func _on_peer_disconnected(id: int) -> void:
 	if _dedicated:
 		_server_on_leave(id)
 	elif multiplayer.is_server():
-		_back_to_lobby("Your partner left.")
+		_host_partner_left(id)
 
 
 func _on_server_disconnected() -> void:
@@ -342,7 +382,9 @@ func _back_to_lobby(message: String, is_error := false) -> void:
 	lobby.visible = true
 	lobby.show_menu(message, is_error)
 	lan.stop_advertising()
-	_search_lan()
+	lan.stop_searching()
+	_party_reset()
+	pause.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
@@ -369,7 +411,7 @@ func _start_dedicated(udp_port: int, ws_port: int, ws_bind: String, tls_dir: Str
 		get_tree().quit(1)
 		return
 	multiplayer.multiplayer_peer = peer
-	print("One Gun One Bullet server: UDP %d, %s on TCP %d. Waiting for players."
+	print("Super Tenet server: UDP %d, %s on TCP %d. Waiting for players."
 		% [udp_port, "HTTPS WebSocket" if tls != null else "plain WebSocket (testing)", ws_port])
 
 
@@ -385,7 +427,7 @@ func _server_tls(dir: String) -> TLSOptions:
 		DirAccess.make_dir_recursive_absolute(dir)
 		var crypto := Crypto.new()
 		key = crypto.generate_rsa(2048)
-		cert = crypto.generate_self_signed_certificate(key, "CN=%s,O=One Gun One Bullet" % SERVER_NAME,
+		cert = crypto.generate_self_signed_certificate(key, "CN=%s,O=Super Tenet" % SERVER_NAME,
 			"20250101000000", "20450101000000")
 		if key.save(key_path) != OK or cert.save(cert_path) != OK:
 			printerr("Couldn't write the server key and certificate to ", dir)
@@ -396,45 +438,235 @@ func _server_tls(dir: String) -> TLSOptions:
 
 func _server_on_join(id: int) -> void:
 	var how: String = multiplayer.multiplayer_peer.transport_of(id)
-	if phase != Phase.LOBBY or _queue.size() >= 2:
+	if phase != Phase.LOBBY or _party_order.size() >= 2:
 		_log_event("player %d (%s) turned away: a game is already running" % [id, how])
 		server_busy.rpc_id(id)
 		get_tree().create_timer(0.5).timeout.connect(func():
 			if multiplayer.multiplayer_peer != null:
 				multiplayer.multiplayer_peer.disconnect_peer(id))
 		return
-	_queue.append(id)
-	_log_event("player %d connected via %s (%d/2)" % [id, how, _queue.size()])
-	if _queue.size() == 2:
-		start_round.rpc(_new_seed(), 1, 1, _queue[0], _queue[1])
-	else:
-		waiting_for_partner.rpc_id(id, "")
+	_log_event("player %d connected via %s (%d/2)" % [id, how, _party_order.size() + 1])
+	if _party_order.is_empty():
+		_party_resume = false
+	_party_add(id, "PLAYER")
+	_party_broadcast("")
 
 
 func _server_on_leave(id: int) -> void:
-	if not _queue.has(id):
+	if not _party.has(id):
 		return
-	_queue.erase(id)
 	_log_event("player %d left" % id)
+	_party_remove(id)
 	if phase != Phase.LOBBY:
 		_clear_round()
 		round_id += 1
 		phase = Phase.LOBBY
-		for other in _queue:
-			waiting_for_partner.rpc_id(other, "Your partner left.")
+	_party_resume = false  # a new partner starts a new game
+	_party_broadcast("Your partner left.")
 
 
-## Server -> one client: you're connected, nobody to play with yet.
-@rpc("authority", "call_remote", "reliable")
-func waiting_for_partner(message: String) -> void:
+## LAN host: the partner left. Keep hosting and wait for someone else.
+func _host_partner_left(id: int) -> void:
+	_log_event("partner %d left" % id)
+	_party_remove(id)
 	_clear_round()
+	round_id += 1
 	phase = Phase.LOBBY
+	_party_resume = false
 	hud.visible = false
 	hand.visible = false
+	pause.visible = false
 	lobby.visible = true
-	lobby.show_busy("CONNECTED. WAITING FOR A PARTNER", message)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	_log_event("waiting for a partner " + message)
+	var answering := lan.start_advertising(_hosting_args[0], lobby.player_name())
+	lobby.show_hosting(_hosting_args[0], _hosting_args[1], _hosting_args[2], answering, "Your partner left.")
+
+
+# --- Match lobby (pick roles, ready up) ---------------------------------------------
+
+func _party_reset() -> void:
+	_party.clear()
+	_party_order.clear()
+	_party_resume = false
+
+
+## Newcomers get whichever role is free.
+func _party_add(id: int, player_name: String) -> void:
+	var taken := []
+	for m in _party.values():
+		taken.append(m["role"])
+	_party[id] = {"name": player_name, "role": ROLE_REVERSE if taken.has(ROLE_FORWARD) else ROLE_FORWARD, "ready": false}
+	_party_order.append(id)
+
+
+func _party_remove(id: int) -> void:
+	_party.erase(id)
+	_party_order.erase(id)
+	for m in _party.values():
+		m["ready"] = false
+
+
+## Calls a host-side handler: directly when we are the host, else by RPC.
+func _to_host(method: String, args: Array = []) -> void:
+	if multiplayer.is_server():
+		callv(method, args)
+	else:
+		var call_args := [1]
+		call_args.append_array(args)
+		Callable(self, method).rpc_id.callv(call_args)
+
+
+## Who sent the RPC being handled (ourselves when called directly).
+func _sender() -> int:
+	var id := multiplayer.get_remote_sender_id()
+	return id if id != 0 else multiplayer.get_unique_id()
+
+
+func _party_broadcast(note: String) -> void:
+	var members := []
+	for id in _party_order:
+		var m: Dictionary = _party[id]
+		members.append([id, m["name"], m["role"], m["ready"]])
+	var info := "NEW GAME"
+	if _party_resume:
+		info = "ROOM %d  ·  ATTEMPT %d  ·  SAME MAP" % [room_no, _resume_attempt()]
+	party_state.rpc(members, info, note)
+
+
+## Host -> a new client: which protocol the host speaks.
+@rpc("authority", "call_remote", "reliable")
+func welcome(host_protocol: int) -> void:
+	if host_protocol != PROTOCOL:
+		_back_to_lobby(_version_message(host_protocol), true)
+
+
+func _version_message(other: int) -> String:
+	return "Version mismatch: the other side runs game version %d, you run %d. Use the same build on both (and on the server)." \
+		% [other, PROTOCOL]
+
+
+@rpc("authority", "call_remote", "reliable")
+func version_refused(host_protocol: int) -> void:
+	_back_to_lobby(_version_message(host_protocol), true)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func party_hello(player_name: String, client_protocol: int) -> void:
+	var id := _sender()
+	if not multiplayer.is_server():
+		return
+	if client_protocol != PROTOCOL:
+		_log_event("player %d refused: protocol %d, ours %d" % [id, client_protocol, PROTOCOL])
+		version_refused.rpc_id(id, PROTOCOL)
+		_party_remove(id)
+		get_tree().create_timer(0.5).timeout.connect(func():
+			if multiplayer.multiplayer_peer != null:
+				multiplayer.multiplayer_peer.disconnect_peer(id))
+		_party_broadcast("")
+		return
+	if _party.has(id):
+		_party[id]["name"] = player_name.strip_edges().to_upper().left(16)
+		_party_broadcast("")
+
+
+## Pick a role; if the partner has it, the two of you swap. Ready resets.
+@rpc("any_peer", "call_remote", "reliable")
+func party_pick(role: int) -> void:
+	var id := _sender()
+	if not multiplayer.is_server() or not _party.has(id) or phase != Phase.LOBBY or role < 0 or role > 1:
+		return
+	for other in _party:
+		if other != id and _party[other]["role"] == role:
+			_party[other]["role"] = 1 - role
+	_party[id]["role"] = role
+	for m in _party.values():
+		m["ready"] = false
+	_party_broadcast("")
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func party_ready(ready: bool) -> void:
+	var id := _sender()
+	if not multiplayer.is_server() or not _party.has(id) or phase != Phase.LOBBY:
+		return
+	_party[id]["ready"] = ready
+	var all_ready := _party.size() == 2
+	for m in _party.values():
+		all_ready = all_ready and m["ready"]
+	if all_ready:
+		_party_start()
+	else:
+		_party_broadcast("")
+
+
+## Either player, in game: everyone back to the match lobby, same room.
+@rpc("any_peer", "call_remote", "reliable")
+func request_party() -> void:
+	if not multiplayer.is_server() or phase == Phase.LOBBY or _party.size() < 2:
+		return
+	var who: String = _party.get(_sender(), {}).get("name", "YOUR PARTNER")
+	_clear_round()
+	round_id += 1  # cancels any pending restart
+	phase = Phase.LOBBY
+	_party_resume = true
+	for m in _party.values():
+		m["ready"] = false
+	_party_broadcast("%s wants to change roles." % who)
+
+
+## The attempt number a resumed game continues with: a death that just
+## happened still counts, going to the lobby itself doesn't.
+func _resume_attempt() -> int:
+	return attempt + 1 if _round_end == "died" else attempt
+
+
+func _party_start() -> void:
+	var a := 0
+	var b := 0
+	for id in _party:
+		if _party[id]["role"] == ROLE_FORWARD:
+			a = id
+		else:
+			b = id
+	for m in _party.values():
+		m["ready"] = false
+	if _party_resume and _round_end == "cleared":
+		start_round.rpc(_new_seed(), room_no + 1, 1, a, b)
+	elif _party_resume:
+		start_round.rpc(room_seed, room_no, _resume_attempt(), a, b)
+	else:
+		start_round.rpc(_new_seed(), 1, 1, a, b)
+	_party_resume = false
+
+
+## Host -> everyone: the match lobby as it stands. Leaves any running round.
+@rpc("authority", "call_local", "reliable")
+func party_state(members: Array, info: String, note: String) -> void:
+	if _dedicated:
+		return
+	if phase != Phase.LOBBY:
+		_clear_round()
+		phase = Phase.LOBBY
+	hud.visible = false
+	hand.visible = false
+	pause.visible = false
+	lobby.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	var list := []
+	for m in members:
+		list.append({"id": m[0], "name": m[1], "role": m[2], "ready": m[3]})
+	lobby.show_party(list, multiplayer.get_unique_id(), info, note)
+	_log_event("match lobby: %s" % [members])
+	# The test bot readies up as soon as there's a partner.
+	if _bot_mode and members.size() == 2:
+		for m in list:
+			if m["id"] == multiplayer.get_unique_id() and not m["ready"]:
+				if _bot_swap_pending:
+					_bot_swap_pending = false
+					var other_role: int = 1 - m["role"]
+					get_tree().create_timer(0.2).timeout.connect(func(): _to_host("party_pick", [other_role]))
+				else:
+					get_tree().create_timer(0.2).timeout.connect(func(): _to_host("party_ready", [true]))
 
 
 @rpc("authority", "call_remote", "reliable")
@@ -543,6 +775,7 @@ func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: in
 	room_seed = seed_in
 	room_no = number
 	attempt = try_no
+	_round_end = ""
 	peer_a = a_peer
 	peer_b = b_peer
 	room = RoomGen.generate(seed_in)
@@ -603,10 +836,12 @@ func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: in
 
 	lan.stop_advertising()  # one partner per game
 	lan.stop_searching()
-	_log_event("round %d try %d seed %d: %d enemies" % [number, try_no, seed_in, enemies.size()])
+	_log_event("round %d try %d seed %d: %d enemies, forward=%d reverse=%d" % [number, try_no, seed_in, enemies.size(), a_peer, b_peer])
 	if local_player == null:
 		return  # dedicated server: no screen to update
 	lobby.visible = false
+	pause.visible = false
+	local_player.input_enabled = true
 	hud.visible = true
 	hand.visible = true
 	hud.role = local_player.role
@@ -650,6 +885,7 @@ func _later(seconds: float, fn: Callable) -> void:
 @rpc("authority", "call_local", "reliable")
 func room_cleared() -> void:
 	phase = Phase.OVER
+	_round_end = "cleared"
 	hud.banner("CLEAR!", Palette.ENEMY)
 	_log_event("room cleared")
 	if multiplayer.is_server():
@@ -666,6 +902,7 @@ func player_down(peer: int, cause: String) -> void:
 	if phase != Phase.PLAYING:
 		return
 	phase = Phase.OVER
+	_round_end = "died"
 	var me := peer == multiplayer.get_unique_id()
 	hud.banner("YOU DIED" if me else "PARTNER DOWN", Palette.DANGER)
 	_log_event("player %d down (%s)" % [peer, cause])
@@ -691,8 +928,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	if phase == Phase.LOBBY:
 		return
 	if event.is_action_pressed("release_mouse"):
-		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	elif event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		if pause.visible:
+			_close_pause()
+		else:
+			_open_pause()
+		return
+	if pause.visible:
+		return
+	if event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("primary"):
@@ -704,6 +947,21 @@ func _unhandled_input(event: InputEvent) -> void:
 			request_restart()
 		else:
 			request_restart.rpc_id(1)
+
+
+func _open_pause() -> void:
+	pause.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if local_player != null:
+		local_player.input_enabled = false
+
+
+func _close_pause(capture := true) -> void:
+	pause.visible = false
+	if local_player != null:
+		local_player.input_enabled = true
+	if capture and phase != Phase.LOBBY and not _bot_mode:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func i_hold_gun() -> bool:
