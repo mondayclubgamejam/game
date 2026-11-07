@@ -1,14 +1,12 @@
 extends Node3D
-## Sky, light and the comic post-process quad. Also owns the screen-wide time
-## effects (rewind tint, kill punch) that gameplay triggers.
+## Sky, light and the comic post-process quad. Also owns the screen-wide
+## effects gameplay triggers (kill punch, slow-motion look).
 
 const Palette := preload("res://scripts/palette.gd")
 const ComicShader := preload("res://shaders/comic.gdshader")
 
 var _post: ShaderMaterial
-var _rewind := 0.0
 var _punch := 0.0
-var _rewind_time := 0.4
 var _slowmo := 0.0
 
 
@@ -59,13 +57,6 @@ func _ready() -> void:
 	set_process(false)
 
 
-## Cold duotone for `seconds`, easing out.
-func rewind_flash(seconds: float) -> void:
-	_rewind = 1.0
-	_rewind_time = seconds
-	set_process(true)
-
-
 ## 0 = normal time, 1 = full slow motion. Called every physics tick.
 func set_slowmo(amount: float) -> void:
 	if absf(amount - _slowmo) > 0.002:
@@ -79,9 +70,7 @@ func punch() -> void:
 
 
 func _process(delta: float) -> void:
-	_rewind = move_toward(_rewind, 0.0, delta / maxf(_rewind_time, 0.05))
 	_punch = move_toward(_punch, 0.0, delta * 8.0)
-	_post.set_shader_parameter("rewind", _rewind)
 	_post.set_shader_parameter("punch", _punch)
-	if _rewind <= 0.0 and _punch <= 0.0:
+	if _punch <= 0.0:
 		set_process(false)

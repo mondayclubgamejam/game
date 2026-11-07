@@ -1061,8 +1061,6 @@ func bullet_recall(seq: int, recaller_id: int) -> void:
 	bullet_seq = seq
 	_action_kills = 0
 	bullet.recall(recaller, mine, 0.0 if mine else _one_way())
-	if mine:
-		fx.rewind_flash(0.6)
 	_log_event("B recalling")
 
 
