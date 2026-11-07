@@ -36,6 +36,7 @@ const DualServerPeer := preload("res://scripts/dual_server_peer.gd")
 const Clock := preload("res://scripts/clock.gd")
 const PauseMenu := preload("res://scripts/pause_menu.gd")
 const Maps := preload("res://scripts/maps.gd")
+const MenuStage := preload("res://scripts/menu_stage.gd")
 
 enum Phase { LOBBY, PLAYING, OVER }
 
@@ -207,6 +208,11 @@ func _ready() -> void:
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
 	_parse_args()
+	# The live scene behind the menus (not on a server or a headless test run).
+	if not _dedicated and DisplayServer.get_name() != "headless":
+		var stage := MenuStage.new()
+		stage.game = self
+		add_child(stage)
 
 
 ## Vulkan on the CPU (no proper GPU driver, common on managed or remote

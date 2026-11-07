@@ -136,6 +136,8 @@ var _slowmo_on := false
 var _message: Label
 var _message_strip: PanelContainer
 var _t := 0.0
+var _intro := 1.0                ## title scale while it drops in
+var _seen_ready := {}            ## player id -> ready, to animate changes in the match lobby
 
 
 func _ready() -> void:
@@ -159,6 +161,12 @@ func _ready() -> void:
 	_build_message_strip()
 	_load_settings()
 	show_menu("", false)
+	# The title slams in on start.
+	_title_node.modulate.a = 0.0
+	_intro = 1.35
+	var tw := create_tween().set_parallel()
+	tw.tween_property(self, "_intro", 1.0, 0.45).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(0.1)
+	tw.tween_property(_title_node, "modulate:a", 1.0, 0.2).set_delay(0.1)
 
 
 # --- Public -------------------------------------------------------------------
@@ -173,6 +181,7 @@ func player_name() -> String:
 
 
 func show_menu(message: String, is_error: bool) -> void:
+	_seen_ready.clear()
 	_show_page(_menu)
 	_set_message(message, is_error)
 
@@ -286,6 +295,17 @@ func _player_card(m: Dictionary, my_id: int, is_host: bool) -> Button:
 	mark.offset_top = -18
 	mark.offset_bottom = 18
 	b.add_child(mark)
+	# New players pop in; a changed tick or cross pops too.
+	var id_seen: int = m["id"]
+	if not _seen_ready.has(id_seen):
+		b.scale = Vector2(0.7, 0.7)
+		b.resized.connect(func(): b.pivot_offset = b.size * 0.5)
+		b.create_tween().tween_property(b, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	elif _seen_ready[id_seen] != m["ready"]:
+		mark.pivot_offset = Vector2(18, 18)
+		mark.scale = Vector2(1.6, 1.6)
+		mark.create_tween().tween_property(mark, "scale", Vector2.ONE, 0.25).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_seen_ready[id_seen] = m["ready"]
 	var movable: bool = is_host and m["id"] != my_id
 	b.disabled = not movable
 	if movable:
@@ -427,6 +447,7 @@ func _build_maps() -> void:
 				map_chosen.emit(id))
 		_maps_node.add_child(b)
 		_map_tiles.append(b)
+		_lively(b, 1.04)
 
 
 ## Highlights the chosen map; only the host can click ready maps. Endless
@@ -521,10 +542,19 @@ func _page(parent: Control) -> VBoxContainer:
 
 func _show_page(page: Control) -> void:
 	var was_join := _join.visible
+	var was_visible := page.visible
 	for p in _pages:
 		p.visible = p == page
+	if not was_visible:
+		_fade_in(page)
 	# In the match lobby the map grid takes the title's place.
+	var title_was := _title_node.visible
 	_title_node.visible = page != _party
+	if _title_node.visible and not title_was:
+		_fade_in(_title_node)
+	if page == _party and not _maps_node.visible:
+		_maps_node.visible = true
+		_deal_tiles()
 	_maps_node.visible = page == _party
 	if was_join != _join.visible:
 		join_page.emit(_join.visible)
@@ -715,6 +745,9 @@ func _set_message(text: String, is_error: bool) -> void:
 
 func _process(delta: float) -> void:
 	_t += delta
+	# The title floats a little.
+	_title_node.rotation = -0.1 + sin(_t * 0.8) * 0.012
+	_title_node.scale = Vector2.ONE * (_intro + sin(_t * 1.1) * 0.006)
 	var dots := ".".repeat(int(_t * 3.0) % 4)
 	if _join.visible and _lan_empty.visible:
 		_lan_empty.text = "SCANNING YOUR NETWORK" + dots
@@ -755,6 +788,44 @@ func _join_typed() -> void:
 		if port <= 0 or port > 65535:
 			port = DEFAULT_PORT
 	join_requested.emit(host, port)
+
+
+# --- Motion -------------------------------------------------------------------
+
+## Buttons ease up a little when hovered and squash when clicked.
+func _lively(b: Control, grow := 1.035) -> void:
+	b.pivot_offset = b.size * 0.5
+	b.resized.connect(func(): b.pivot_offset = b.size * 0.5)
+	b.mouse_entered.connect(func():
+		if not (b is BaseButton and b.disabled):
+			_tween_scale(b, grow, 0.12))
+	b.mouse_exited.connect(func(): _tween_scale(b, 1.0, 0.16))
+	if b is BaseButton:
+		b.button_down.connect(func(): _tween_scale(b, 0.96, 0.05))
+		b.button_up.connect(func(): _tween_scale(b, grow if b.is_hovered() else 1.0, 0.18))
+
+
+func _tween_scale(c: Control, to: float, seconds: float) -> void:
+	var tw := c.create_tween()
+	tw.tween_property(c, "scale", Vector2.ONE * to, seconds).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _fade_in(c: CanvasItem) -> void:
+	c.modulate.a = 0.0
+	c.create_tween().tween_property(c, "modulate:a", 1.0, 0.22)
+
+
+## The map tiles flip in one after another when the match lobby opens.
+func _deal_tiles() -> void:
+	for i in _map_tiles.size():
+		var b := _map_tiles[i]
+		b.pivot_offset = b.size * 0.5
+		b.scale = Vector2(0.6, 0.6)
+		b.modulate.a = 0.0
+		var tw := b.create_tween().set_parallel()
+		var delay := 0.035 * i
+		tw.tween_property(b, "scale", Vector2.ONE, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(delay)
+		tw.tween_property(b, "modulate:a", 1.0, 0.15).set_delay(delay)
 
 
 # --- Widgets ------------------------------------------------------------------
@@ -833,6 +904,7 @@ func _card(title: String, subtitle: String, color: Color, on_press: Callable) ->
 	b.add_theme_stylebox_override("hover", _slanted(color.lightened(0.18)))
 	b.add_theme_stylebox_override("pressed", _slanted(color.darkened(0.2)))
 	b.pressed.connect(on_press)
+	_lively(b)
 	var box := VBoxContainer.new()
 	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	box.offset_left = 30
@@ -863,4 +935,5 @@ func _small_button(text: String, color: Color, on_press: Callable) -> Button:
 	b.add_theme_color_override("font_outline_color", Palette.INK)
 	b.add_theme_constant_override("outline_size", 6)
 	b.pressed.connect(on_press)
+	_lively(b)
 	return b

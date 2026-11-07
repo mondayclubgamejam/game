@@ -200,6 +200,7 @@ static func _build_ceiling(root: Node3D, body: StaticBody3D, extent: Vector2) ->
 		panels.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3(1.4, 0.04, 0.5)), spots[i]))
 	var panels_mi := MultiMeshInstance3D.new()
 	panels_mi.multimesh = panels
+	panels_mi.name = "CeilingPanels"
 	panels_mi.material_override = panel_mat
 	panels_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(panels_mi)

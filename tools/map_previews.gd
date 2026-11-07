@@ -18,6 +18,12 @@ func _initialize() -> void:
 	change_scene_to_file("res://scenes/main.tscn")
 	await create_timer(1.0).timeout
 	var main = current_scene
+	# From above, the pale rooms and the low sun clip to white: darken for the pictures.
+	for env in main.find_children("*", "WorldEnvironment", true, false):
+		env.environment.tonemap_exposure = 0.5
+	for sun in main.find_children("*", "DirectionalLight3D", true, false):
+		sun.light_energy *= 0.45
+		sun.rotation_degrees = Vector3(-62, -30, 0)
 	var team := [[1, 0, "A"], [2, 1, "B"]]
 	var jobs := [["random", 20240, 1, "random"], ["endless", 31337, 7, "endless"], ["tutorial", 1, 2, "tutorial_b"]]
 	for id in Maps.ORDER:
@@ -28,6 +34,11 @@ func _initialize() -> void:
 		main.hand.visible = false
 		main.lobby.visible = false
 		await create_timer(0.4).timeout
+		# Look in from above: no ceiling.
+		for n in ["Ceiling", "CeilingPanels"]:
+			var c: Node = main.round_root.find_child(n, true, false)
+			if c != null:
+				c.visible = false
 		var r = main.room
 		var cam := Camera3D.new()
 		main.add_child(cam)
