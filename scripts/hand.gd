@@ -1,11 +1,20 @@
 extends Control
-## First-person glove and pistol drawn as flat comic shapes (no art assets).
-## The glove takes the player's time colour. Fire kicks the gun up; recall is
-## the same motion reversed: the gun is yanked forward as the bullet slams in.
+## First-person revolver. The gun is a 3D model (scripts/revolver.gd) in a
+## gloved hand attached to the camera, pointing where you aim. This overlay
+## animates it (raise, bob, recoil) and draws the 2D muzzle flash and recall
+## rings at the muzzle's spot on screen. Fire kicks the gun up and back;
+## recall plays that backwards: the gun is yanked forward as the bullet lands.
 
 const Palette := preload("res://scripts/palette.gd")
+const Revolver := preload("res://scripts/revolver.gd")
 
-var player: Node = null
+## Where the gun rests relative to the camera, and a slight turn inward so
+## the barrel lines up with the crosshair.
+const REST := Vector3(0.2, -0.19, -0.5)
+const REST_YAW := 0.045
+const SCALE := 0.8
+
+var player: Node = null      ## the local player (its camera holds the gun)
 var role := 0
 var holding := false
 var loaded := true
@@ -16,6 +25,12 @@ var flash := 0.0      ## muzzle starburst
 var implode := 0.0    ## blue rings collapsing into the barrel
 var _bob_t := 0.0
 var _bob := 0.0
+
+var _camera: Camera3D
+var _rig: Node3D
+var _drum: MeshInstance3D
+var _muzzle: Node3D
+var _shown_loaded := true
 
 
 func _ready() -> void:
@@ -30,7 +45,65 @@ func _process(delta: float) -> void:
 		move = clampf(player.move_amount, 0.0, 1.5)
 	_bob = lerpf(_bob, move, delta * 8.0)
 	_bob_t += delta * (5.0 + 5.0 * move)
+	_ensure_rig()
+	if _rig != null:
+		_pose_rig()
 	queue_redraw()
+
+
+## Builds the hand and revolver on the local player's camera (again after
+## every new round, since each round makes a new player).
+func _ensure_rig() -> void:
+	if player == null or not is_instance_valid(player):
+		return
+	var cam: Camera3D = player.camera
+	if cam == null or cam == _camera and is_instance_valid(_rig):
+		return
+	_camera = cam
+	_rig = Node3D.new()
+	_rig.scale = Vector3.ONE * SCALE
+	cam.add_child(_rig)
+	var parts: Array = Revolver.build()
+	var gun: Node3D = parts[0]
+	_drum = parts[1]
+	_rig.add_child(gun)
+	_muzzle = Node3D.new()
+	_muzzle.position = Vector3(0, 0.035, -0.34)
+	gun.add_child(_muzzle)
+	# Gloved hand round the grip, in this player's time colour, and a sleeve.
+	var glove := MeshInstance3D.new()
+	var fist := BoxMesh.new()
+	fist.size = Vector3(0.075, 0.1, 0.1)
+	glove.mesh = fist
+	glove.position = Vector3(0, -0.1, 0.08)
+	glove.rotation.x = -0.35
+	glove.material_override = Palette.toon(Palette.role_color(role))
+	_rig.add_child(glove)
+	var sleeve := MeshInstance3D.new()
+	var arm := CylinderMesh.new()
+	arm.top_radius = 0.045
+	arm.bottom_radius = 0.055
+	arm.height = 0.3
+	sleeve.mesh = arm
+	sleeve.position = Vector3(0.02, -0.16, 0.24)
+	sleeve.rotation.x = PI / 2.0 - 0.45
+	sleeve.material_override = Palette.toon(Palette.INK.lightened(0.15))
+	_rig.add_child(sleeve)
+	for mi in [glove, sleeve]:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_shown_loaded = not loaded  # force the drum colour to update
+
+
+func _pose_rig() -> void:
+	var bob := Vector3(sin(_bob_t) * 0.012, -absf(cos(_bob_t)) * 0.01, 0) * _bob
+	var lowered := (1.0 - raise) * 0.35
+	# Fire (kick > 0): up and back. Recall (kick < 0): yanked forward.
+	_rig.position = REST + bob + Vector3(0, -lowered + kick * 0.025, kick * 0.07)
+	_rig.rotation = Vector3(kick * 0.35, REST_YAW, -kick * 0.05)
+	_rig.visible = raise > 0.01
+	if loaded != _shown_loaded:
+		_shown_loaded = loaded
+		_drum.material_override = Palette.glow(Palette.FORWARD, 2.5) if loaded else Palette.toon(Palette.MUTED)
 
 
 func play_fire() -> void:
@@ -61,57 +134,29 @@ func play_catch() -> void:
 	create_tween().tween_property(self, "kick", 0.0, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
+## Muzzle flash and recall rings, drawn where the muzzle is on screen.
 func _draw() -> void:
-	if raise <= 0.01 or size.y < 1.0:
+	if (flash <= 0.0 and implode <= 0.0) or _muzzle == null or not is_instance_valid(_muzzle) \
+			or _camera == null or not is_instance_valid(_camera):
 		return
+	var p := _camera.unproject_position(_muzzle.global_position)
 	var s := size.y / 720.0
-	var glove := Palette.role_color(role)
-	var bob := Vector2(sin(_bob_t) * 12.0, absf(cos(_bob_t)) * 9.0) * _bob
-	var lowered := (1.0 - raise) * 420.0
-	var origin := Vector2(size.x * 0.64, size.y + 40.0 * s) + (bob + Vector2(0, lowered + kick * 60.0)) * s
-	draw_set_transform(origin, -0.08 - kick * 0.22, Vector2.ONE * s * (1.0 - kick * 0.1))
-
 	if implode > 0.0:
 		for i in 3:
 			var col := Palette.REVERSE
 			col.a = implode
-			draw_arc(Vector2(0, -330), 24.0 + (implode + i * 0.35) * 120.0, 0, TAU, 32, col, 9.0)
-
-	# Pistol: slide, barrel tip, sights; the chamber window shows if it's loaded.
-	_poly([Vector2(-44, -100), Vector2(-38, -296), Vector2(38, -296), Vector2(44, -100)], Palette.STEEL)
-	_poly([Vector2(-20, -296), Vector2(-20, -322), Vector2(20, -322), Vector2(20, -296)], Palette.INK)
-	_poly([Vector2(-8, -322), Vector2(-8, -336), Vector2(8, -336), Vector2(8, -322)], Palette.INK, 0.0)
-	var chamber := Palette.FORWARD if loaded else Palette.MUTED
-	_poly([Vector2(-14, -200), Vector2(-14, -250), Vector2(14, -250), Vector2(14, -200)], chamber, 4.0)
-	draw_line(Vector2(-30, -140), Vector2(30, -140), Palette.INK, 4.0)
-	draw_line(Vector2(-30, -160), Vector2(30, -160), Palette.INK, 4.0)
-
-	# Glove wrapped round the grip.
-	_poly([Vector2(-120, 80), Vector2(-108, -40), Vector2(-60, -126), Vector2(10, -150),
-		Vector2(84, -128), Vector2(116, -50), Vector2(122, 80)], glove)
-	_poly([Vector2(-120, 80), Vector2(-116, 30), Vector2(122, 30), Vector2(122, 80)], Palette.INK)
-	for x in [-50.0, -8.0, 34.0, 72.0]:
-		draw_line(Vector2(x, -136 + absf(x) * 0.25), Vector2(x - 6, -86), Palette.INK, 5.0)
-	_poly([Vector2(-70, -110), Vector2(-104, -170), Vector2(-86, -196), Vector2(-46, -140)], glove.lightened(0.3))
-
+			draw_arc(p, (12.0 + (implode + i * 0.35) * 70.0) * s, 0, TAU, 32, col, 6.0 * s)
 	if flash > 0.0:
-		_star(Vector2(0, -350), 30.0 + 100.0 * flash, 14.0 + 30.0 * flash, Palette.SIGNAL)
-		_star(Vector2(0, -350), 14.0 + 50.0 * flash, 8.0 + 14.0 * flash, Color("fffbe6"))
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-
-func _poly(points: Array, fill: Color, outline := 6.0) -> void:
-	var pts := PackedVector2Array(points)
-	draw_colored_polygon(pts, fill)
-	if outline > 0.0:
-		var closed := pts.duplicate()
-		closed.append(pts[0])
-		draw_polyline(closed, Palette.INK, outline, true)
+		_star(p, (20.0 + 60.0 * flash) * s, (9.0 + 18.0 * flash) * s, Palette.SIGNAL)
+		_star(p, (10.0 + 28.0 * flash) * s, (5.0 + 9.0 * flash) * s, Color("fffbe6"))
 
 
 func _star(c: Vector2, outer: float, inner: float, col: Color) -> void:
-	var pts := []
+	var pts := PackedVector2Array()
 	for i in 18:
 		var a := TAU * i / 18.0 + flash * 0.6
 		pts.append(c + Vector2(cos(a), sin(a)) * (outer if i % 2 == 0 else inner))
-	_poly(pts, col, 4.0)
+	draw_colored_polygon(pts, col)
+	var closed := pts.duplicate()
+	closed.append(pts[0])
+	draw_polyline(closed, Palette.INK, 3.0, true)

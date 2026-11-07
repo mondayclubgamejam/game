@@ -33,6 +33,7 @@ const Lobby := preload("res://scripts/lobby.gd")
 const Bot := preload("res://scripts/bot.gd")
 const LanDiscovery := preload("res://scripts/lan_discovery.gd")
 const DualServerPeer := preload("res://scripts/dual_server_peer.gd")
+const Clock := preload("res://scripts/clock.gd")
 const PauseMenu := preload("res://scripts/pause_menu.gd")
 
 enum Phase { LOBBY, PLAYING, OVER }
@@ -55,10 +56,12 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Network protocol version. Bump it whenever an RPC's arguments change, so
 ## mismatched builds refuse each other with a clear message instead of
 ## failing on individual RPCs.
-const PROTOCOL := 5
+const PROTOCOL := 6
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
 const SERVER_NAME := "one-gun-one-bullet"       ## the name inside that certificate
+const SLOW_IN_RATE := 3.0     ## how fast time eases into slow motion (per second)
+const SLOW_OUT_RATE := 10.0   ## and how fast it snaps back when someone moves
 const UDP_TRY_SECONDS := 2.5   ## how long to try UDP before falling back to WebSocket
 const WS_TRY_SECONDS := 8.0
 
@@ -106,6 +109,8 @@ var _peaceful := false
 var _bot_mode := false
 var _net_role := "offline"
 var _auto_join_lan := false
+var _slowmo_enabled := false   ## host: chosen in the match lobby (off by default)
+var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
 var _party := {}               ## host: match lobby members, peer id -> {name, role, ready}
 var _party_order: Array[int] = []
 var _party_resume := false     ## host: the next start continues the current room
@@ -162,6 +167,7 @@ func _ready() -> void:
 			lan.stop_searching())
 	lobby.role_chosen.connect(func(role: int): _to_host("party_pick", [role]))
 	lobby.ready_toggled.connect(func(ready: bool): _to_host("party_ready", [ready]))
+	lobby.slowmo_toggled.connect(func(on: bool): _to_host("party_set_slowmo", [on]))
 
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -226,6 +232,8 @@ func _parse_args() -> void:
 			_log = true
 		elif arg == "--peaceful":
 			_peaceful = true
+		elif arg == "--slowmo":
+			_slowmo_enabled = true  # host/server: start with slow motion on
 		elif arg == "--bot":
 			_bot_mode = true
 			_log = true
@@ -521,7 +529,7 @@ func _party_broadcast(note: String) -> void:
 	var info := "NEW GAME"
 	if _party_resume:
 		info = "ROOM %d  ·  ATTEMPT %d  ·  SAME MAP" % [room_no, _resume_attempt()]
-	party_state.rpc(members, info, note)
+	party_state.rpc(members, info, note, _slowmo_enabled)
 
 
 ## Host -> a new client: which protocol the host speaks.
@@ -590,6 +598,18 @@ func party_ready(ready: bool) -> void:
 		_party_broadcast("")
 
 
+## Either player: turn "time slows while both stand still" on or off.
+@rpc("any_peer", "call_remote", "reliable")
+func party_set_slowmo(on: bool) -> void:
+	var id := _sender()
+	if not multiplayer.is_server() or not _party.has(id) or phase != Phase.LOBBY:
+		return
+	_slowmo_enabled = on
+	for m in _party.values():
+		m["ready"] = false
+	_party_broadcast("%s turned time slowing %s." % [_party[id]["name"], "on" if on else "off"])
+
+
 ## Either player, in game: everyone back to the match lobby, same room.
 @rpc("any_peer", "call_remote", "reliable")
 func request_party() -> void:
@@ -632,7 +652,7 @@ func _party_start() -> void:
 
 ## Host -> everyone: the match lobby as it stands. Leaves any running round.
 @rpc("authority", "call_local", "reliable")
-func party_state(members: Array, info: String, note: String) -> void:
+func party_state(members: Array, info: String, note: String, slowmo: bool) -> void:
 	if _dedicated:
 		return
 	if phase != Phase.LOBBY:
@@ -646,7 +666,7 @@ func party_state(members: Array, info: String, note: String) -> void:
 	var list := []
 	for m in members:
 		list.append({"id": m[0], "name": m[1], "role": m[2], "ready": m[3]})
-	lobby.show_party(list, multiplayer.get_unique_id(), info, note)
+	lobby.show_party(list, multiplayer.get_unique_id(), info, slowmo, note)
 	_log_event("match lobby: %s" % [members])
 	# The test bot readies up as soon as there's a partner.
 	if _bot_mode and members.size() == 2:
@@ -797,7 +817,7 @@ func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: in
 		round_root.add_child(e)
 		enemies.append(e)
 	_enemies_left = enemies.size()
-	_enemy_buf.resize(enemies.size() * 3)
+	_enemy_buf.resize(enemies.size() * 3 + 1)
 
 	gun = Gun.new()
 	round_root.add_child(gun)
@@ -860,6 +880,8 @@ func _clear_round() -> void:
 	tracers = null
 	debris = null
 	aim_line = null
+	Clock.scale = 1.0
+	_host_time_target = 1.0
 
 
 ## Runs `fn` after `seconds` unless a new round started in between.
@@ -1244,17 +1266,21 @@ func _on_local_shot() -> void:
 	_local_died("shot")
 
 
-## Packed enemy positions: x, z, yaw for each enemy.
+## Packed enemy positions (x, z, yaw each), followed by the host's
+## slow-motion target as the last value.
 @rpc("authority", "call_remote", "unreliable_ordered", 2)
 func enemy_sync(data: PackedFloat32Array) -> void:
-	var n := mini(enemies.size(), data.size() / 3)
+	if data.is_empty():
+		return
+	_host_time_target = data[data.size() - 1]
+	var n := mini(enemies.size(), (data.size() - 1) / 3)
 	for i in n:
 		enemies[i].apply_net_state(data[i * 3], data[i * 3 + 1], data[i * 3 + 2])
 
 
 # --- Per-tick work ----------------------------------------------------------------------
 
-## `flags`: Player.FLAG_CROUCH.
+## `flags`: Player.FLAG_CROUCH / FLAG_MOVING.
 @rpc("any_peer", "call_remote", "unreliable_ordered", 1)
 func net_player_state(pos: Vector3, yaw: float, pitch: float, flags: int) -> void:
 	var p: Player = players.get(multiplayer.get_remote_sender_id())
@@ -1299,6 +1325,7 @@ func _physics_process(delta: float) -> void:
 			else:
 				net_ping.rpc_id(1, Time.get_ticks_usec())
 
+	_update_clock(delta)
 	if multiplayer.is_server():
 		_sync_t -= delta
 		if _sync_t <= 0.0:
@@ -1308,6 +1335,7 @@ func _physics_process(delta: float) -> void:
 				_enemy_buf[i * 3] = e.global_position.x
 				_enemy_buf[i * 3 + 1] = e.global_position.z
 				_enemy_buf[i * 3 + 2] = e.rotation.y
+			_enemy_buf[enemies.size() * 3] = _host_time_target
 			enemy_sync.rpc(_enemy_buf)
 
 	if local_player != null and phase == Phase.PLAYING and local_player.alive:
@@ -1322,14 +1350,40 @@ func _physics_process(delta: float) -> void:
 	multiplayer.poll()
 
 
+# --- Slow motion ------------------------------------------------------------------------
+
+## Time slows while both players stand still and runs normally as soon as
+## either moves. The host decides (it hears both players) and sends its
+## decision with every enemy update; each player also speeds time up the
+## moment they move themselves, without waiting for the host.
+func _update_clock(delta: float) -> void:
+	var target := 1.0
+	if _slowmo_enabled and phase == Phase.PLAYING:
+		if multiplayer.is_server():
+			var anyone_moving := false
+			for p in players.values():
+				if p.is_moving():
+					anyone_moving = true
+			var was := _host_time_target
+			_host_time_target = 1.0 if anyone_moving or players.is_empty() else Clock.SLOW
+			if was != _host_time_target:
+				_log_event("time slowed" if _host_time_target < 1.0 else "time normal")
+			target = _host_time_target
+		else:
+			target = 1.0 if local_player != null and local_player.is_moving() else _host_time_target
+	var rate := SLOW_OUT_RATE if target > Clock.scale else SLOW_IN_RATE
+	Clock.scale = move_toward(Clock.scale, target, rate * delta)
+	fx.set_slowmo(inverse_lerp(1.0, Clock.SLOW, Clock.scale))
+
+
 func _process(_delta: float) -> void:
 	if phase == Phase.LOBBY or local_player == null:
 		return
 	hud.targets = _enemies_left
 	hud.can_act = can_fire() or can_recall()
 	hud.ping_ms = int(rtt * 1000.0) if rtt > 0.0 else -1
-	_update_status()
 	_update_markers()
+	hud.slowmo = inverse_lerp(1.0, Clock.SLOW, Clock.scale)
 
 
 # --- Aim preview --------------------------------------------------------------------------
@@ -1421,51 +1475,6 @@ func _ray_world(a: Vector3, b: Vector3) -> Variant:
 
 
 # --- HUD ------------------------------------------------------------------------------------
-
-func _update_status() -> void:
-	var t := ""
-	var cap := ""
-	var col := Palette.MUTED
-	var a := local_player.role == ROLE_FORWARD
-	if not local_player.alive:
-		t = "DOWN"
-		cap = "RESTARTING THE ROOM"
-		col = Palette.DANGER
-	elif bullet.state == Bullet.FORWARD:
-		t = "FIRING"
-		cap = "BULLET FLYING OUT"
-		col = Palette.FORWARD
-	elif bullet.state == Bullet.RECALL:
-		t = "RETURNING"
-		cap = "BULLET FLYING BACK"
-		col = Palette.REVERSE
-	elif gun.state == Gun.FLYING:
-		t = "CATCH!"
-		cap = "GUN IN THE AIR"
-		col = Palette.SIGNAL
-	elif gun.state == Gun.GROUND:
-		t = "GRAB IT"
-		cap = "GUN ON THE FLOOR"
-		col = Palette.SIGNAL
-	elif gun.holder == local_player:
-		if can_fire():
-			t = "FIRE"
-			cap = "LOADED  ·  LMB"
-			col = Palette.FORWARD
-		elif can_recall():
-			t = "RECALL"
-			cap = "BULLET IS OUT  ·  LMB"
-			col = Palette.REVERSE
-		else:
-			t = "PASS IT"
-			cap = ("EMPTY" if a else "YOU CAN'T FIRE") + "  ·  RMB THROW"
-	else:
-		t = "PARTNER"
-		cap = "HAS THE GUN  ·  GET READY"
-	hud.status_text = t
-	hud.status_caption = cap
-	hud.status_color = col
-
 
 func _update_markers() -> void:
 	hud.markers.clear()

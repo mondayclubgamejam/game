@@ -10,14 +10,12 @@ var font: Font
 
 # Set by the game every frame.
 var role := 0
-var status_text := ""
-var status_caption := ""
-var status_color := Palette.MUTED
 var can_act := false
 var targets := 0
 var attempt := 1
 var ping_ms := -1
 var markers: Array = []          ## [Vector2 pos, Color, String label, bool on_screen]
+var slowmo := 0.0                ## 0 normal time .. 1 full slow motion
 
 var _banner_text := ""
 var _banner_color := Palette.FORWARD
@@ -72,6 +70,9 @@ func _draw() -> void:
 	var s := h / 720.0
 	var role_col := Palette.role_color(role)
 
+	if slowmo > 0.35:
+		_draw_slowmo(w, s)
+
 	for m in markers:
 		_draw_marker(m[0], m[1], m[2], m[3], s)
 
@@ -89,17 +90,12 @@ func _draw() -> void:
 	_panel(Vector2(36, 84) * s, Vector2(170, 34) * s, Palette.INK.lightened(0.18))
 	_text("ATTEMPT  %d" % attempt, Vector2(58, 109) * s, int(20 * s), Palette.SIGNAL, 0)
 
-	# Role tag, top right.
-	var role_name := "FORWARD  ·  A" if role == 0 else "REVERSE  ·  B"
-	var role_sub := "YOU CAN ONLY FIRE" if role == 0 else "YOU CAN ONLY RECALL"
-	_panel(Vector2(w - 330 * s, 24 * s), Vector2(306, 70) * s, role_col)
-	_text(role_name, Vector2(w - 300 * s, 62 * s), int(30 * s), Color.WHITE, int(8 * s))
-	_text(role_sub, Vector2(w - 296 * s, 84 * s), int(15 * s), Palette.INK, 0)
-
-	# Gun status, bottom left.
-	_panel(Vector2(24, h / s - 120) * s, Vector2(360, 96) * s, status_color)
-	_text(status_caption, Vector2(72, h / s - 92) * s, int(17 * s), Palette.INK, 0)
-	_text(status_text, Vector2(58, h / s - 44) * s, int(46 * s), Color.WHITE, int(11 * s))
+	# Role tag, top right, sized to the word.
+	var role_name := "NORMAL" if role == 0 else "INVERTED"
+	var word_w := font.get_string_size(role_name, HORIZONTAL_ALIGNMENT_LEFT, -1, int(26 * s)).x
+	var tag := Vector2(word_w / s + 64, 46)
+	_panel(Vector2(w - (tag.x + 24) * s, 24 * s), tag * s, role_col)
+	_text(role_name, Vector2(w - (tag.x - 6) * s, 58 * s), int(26 * s), Color.WHITE, int(7 * s))
 
 	var hint := HINT if ping_ms < 0 else "%s     PING %d MS" % [HINT, ping_ms]
 	draw_string(font, Vector2(0, h - 10 * s), hint, HORIZONTAL_ALIGNMENT_RIGHT, w - 16 * s,
@@ -107,6 +103,19 @@ func _draw() -> void:
 
 	if _banner_x < 1.6:
 		_draw_banner(w, h, s)
+
+
+func _draw_slowmo(w: float, s: float) -> void:
+	var a := clampf((slowmo - 0.35) / 0.4, 0.0, 1.0)
+	var pos := Vector2(w * 0.5 - 95 * s, 66 * s)  # top centre, below markers pinned to the edge
+	var fill := Color(Palette.MUTED.lightened(0.35), a)
+	var ink := Color(Palette.INK, a)
+	draw_colored_polygon(PackedVector2Array([pos + Vector2(14, 0) * s, pos + Vector2(190, 0) * s,
+		pos + Vector2(176, 40) * s, pos + Vector2(0, 40) * s]), ink)
+	draw_colored_polygon(PackedVector2Array([pos + Vector2(18, 4) * s, pos + Vector2(184, 4) * s,
+		pos + Vector2(172, 36) * s, pos + Vector2(6, 36) * s]), fill)
+	draw_string(font, pos + Vector2(30, 31) * s, "TIME SLOWED", HORIZONTAL_ALIGNMENT_LEFT, -1,
+		int(26 * s), Color(Color.WHITE, a))
 
 
 func _draw_marker(p: Vector2, col: Color, label: String, on_screen: bool, s: float) -> void:

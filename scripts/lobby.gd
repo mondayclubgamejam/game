@@ -12,6 +12,7 @@ signal online_requested(address: String)
 signal join_page(opened: bool)        ## the network scan only runs while this page is open
 signal role_chosen(role: int)
 signal ready_toggled(ready: bool)
+signal slowmo_toggled(on: bool)
 
 const Palette := preload("res://scripts/palette.gd")
 const TitleFont := preload("res://assets/fonts/Anton-Regular.ttf")
@@ -42,6 +43,8 @@ var _slots: Array[PanelContainer] = []
 var _role_buttons: Array[Button] = []
 var _ready_button: Button
 var _my_ready := false
+var _slowmo_button: Button
+var _slowmo_on := false
 var _message: Label
 var _message_strip: PanelContainer
 var _t := 0.0
@@ -113,7 +116,7 @@ func show_busy(text: String, note := "") -> void:
 
 ## The match lobby. `members`: [{id, name, role (0 forward / 1 reverse), ready}].
 ## `info` says whether this is a new game or a return to the same room.
-func show_party(members: Array, my_id: int, info: String, note := "") -> void:
+func show_party(members: Array, my_id: int, info: String, slowmo: bool, note := "") -> void:
 	if not _party.visible:
 		_show_page(_party)
 	_party_info.text = info
@@ -133,6 +136,10 @@ func show_party(members: Array, my_id: int, info: String, note := "") -> void:
 		var picked := r == my_role
 		_role_buttons[r].add_theme_stylebox_override("normal", _slanted(Palette.role_color(r) if picked
 			else Palette.role_color(r).darkened(0.55), 6 if picked else 4, Color.WHITE if picked else Palette.INK))
+	_slowmo_on = slowmo
+	_slowmo_button.text = "TIME SLOWS WHEN YOU BOTH STAND STILL:  " + ("ON" if slowmo else "OFF")
+	_slowmo_button.add_theme_stylebox_override("normal", _slanted(Palette.MUTED.lightened(0.25) if slowmo
+		else Palette.MUTED.darkened(0.45), 6 if slowmo else 4, Color.WHITE if slowmo else Palette.INK))
 	_my_ready = mine.get("ready", false)
 	var full := members.size() >= 2
 	_ready_button.disabled = not full
@@ -340,14 +347,26 @@ func _build_party() -> void:
 		roles.add_child(b)
 		_role_buttons.append(b)
 
+	_party.add_child(_heading("MATCH OPTIONS", Palette.MUTED.lightened(0.5)))
+	_slowmo_button = _small_button("", Palette.MUTED, func(): slowmo_toggled.emit(not _slowmo_on))
+	_slowmo_button.add_theme_font_size_override("font_size", 18)
+	_slowmo_button.custom_minimum_size.y = 40
+	_party.add_child(_slowmo_button)
+
 	var fill := Control.new()
 	fill.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_party.add_child(fill)
+	var bottom := HBoxContainer.new()
+	bottom.add_theme_constant_override("separation", 12)
+	_party.add_child(bottom)
 	_ready_button = _small_button("I'M READY", Palette.MUTED, func(): ready_toggled.emit(not _my_ready))
 	_ready_button.custom_minimum_size.y = 56
+	_ready_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_ready_button.add_theme_font_size_override("font_size", 28)
-	_party.add_child(_ready_button)
-	_party.add_child(_small_button("LEAVE", Palette.DANGER, func(): cancel_requested.emit()))
+	bottom.add_child(_ready_button)
+	var leave := _small_button("LEAVE", Palette.DANGER, func(): cancel_requested.emit())
+	leave.custom_minimum_size = Vector2(130, 56)
+	bottom.add_child(leave)
 
 
 ## A player's slot: name, role and whether they're ready.

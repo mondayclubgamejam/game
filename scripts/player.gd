@@ -20,6 +20,7 @@ const CROUCH_EYE := 1.0
 const HEIGHT := 1.8
 const CROUCH_HEIGHT := 1.15
 const CROUCH_RATE := 9.0     ## how fast crouching eases in and out
+const MOVING_SPEED := 0.4    ## slower than this on the ground counts as standing still
 const MOUSE_SENS := 0.0022
 const LAYER_PLAYER := 4
 const MASK_WORLD := 1
@@ -27,6 +28,7 @@ const MAX_EXTRAPOLATE := 0.12
 
 ## Bits of the flags sent with every network update.
 const FLAG_CROUCH := 1
+const FLAG_MOVING := 2
 
 var peer_id := 0
 var role := 0                ## 0 = forward (A), 1 = reverse (B)
@@ -52,6 +54,7 @@ var _net_vel := Vector3.ZERO
 var _net_yaw := 0.0
 var _net_pitch := 0.0
 var _net_age := 0.0
+var _net_moving := false
 var _has_net := false
 
 
@@ -179,8 +182,17 @@ func _apply_crouch(delta: float) -> void:
 		_body.scale.y = h / HEIGHT
 
 
+## True if this player counts as moving for the slow-motion rule.
+func is_moving() -> bool:
+	if not alive:
+		return false
+	if not is_local:
+		return _net_moving
+	return Vector2(velocity.x, velocity.z).length() > MOVING_SPEED or not is_on_floor()
+
+
 func net_flags() -> int:
-	return FLAG_CROUCH if crouching else 0
+	return (FLAG_CROUCH if crouching else 0) | (FLAG_MOVING if is_moving() else 0)
 
 
 func _remote_follow(delta: float) -> void:
@@ -211,6 +223,7 @@ func apply_net_state(pos: Vector3, yaw: float, pitch_in: float, flags: int) -> v
 	_net_age = 0.0
 	_has_net = true
 	crouching = flags & FLAG_CROUCH != 0
+	_net_moving = flags & FLAG_MOVING != 0
 
 
 func place(pos: Vector3, yaw: float) -> void:
