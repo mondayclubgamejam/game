@@ -34,10 +34,12 @@ const SWORD_TIP := -1.01
 const SWORD_BASE := -0.2
 const KNIFE_SCALE := 1.3
 const TRAIL_POINTS := 10
+const FAR_SQ := 14.0 * 14.0       ## beyond this, idle poses update every other frame
 
 static var _flash_mesh: Mesh
 static var _flash_mat: Material
 static var _trail_mat: Material
+static var _skin_cache := {}
 
 var kind := 0
 var tint_parts: Array[MeshInstance3D] = []   ## flash white on wind-up, yellow when targeted
@@ -56,6 +58,7 @@ var _t := 0.0
 var _seed := 0.0
 var _aim_pitch := 0.0
 var _aiming := false
+var _skip := false
 
 var _muzzle: Node3D
 var _flash: MeshInstance3D
@@ -116,12 +119,16 @@ func setup(kind_in: int, skin: Color, accent: Color, seed_in: float) -> void:
 
 
 ## Enemies: matte magenta with a light rim, so they pop against pale walls.
+## Shared per colour, like every other material.
 func _body_material(skin: Color) -> StandardMaterial3D:
-	var m: StandardMaterial3D = Palette.toon(skin).duplicate()
-	m.rim_enabled = true
-	m.rim = 0.55
-	m.rim_tint = 0.35
-	return m
+	var key := skin.to_html()
+	if not _skin_cache.has(key):
+		var m: StandardMaterial3D = Palette.toon(skin).duplicate()
+		m.rim_enabled = true
+		m.rim = 0.55
+		m.rim_tint = 0.35
+		_skin_cache[key] = m
+	return _skin_cache[key]
 
 
 ## A glowing band across the face in the kind's colour: shows where it looks.
@@ -221,6 +228,13 @@ func animate(real_delta: float, speed: float, aim_at: Variant) -> void:
 		if _fallback_arm != null:
 			_fallback_arm.rotation.x = _aim_pitch if _aiming else -0.6
 		return
+	# Far away and calm: pose every other frame (with twice the step).
+	_skip = not _skip
+	var cam := get_viewport().get_camera_3d() if real_delta > 0.0 else null
+	if _state == IDLE and _skip and cam != null and cam.global_position.distance_squared_to(global_position) > FAR_SQ:
+		return
+	if _state == IDLE and cam != null and cam.global_position.distance_squared_to(global_position) > FAR_SQ:
+		delta *= 2.0
 	var target := _target_pose()
 	var k := 1.0 - exp(-RATE[_state] * delta) if real_delta > 0.0 else 1.0
 	for bone in target:

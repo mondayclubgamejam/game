@@ -31,6 +31,16 @@ var prompt_text := ""            ## ... "FIRE"
 var threats: Array = []          ## [angle from straight ahead (rad, + = right), urgency 0..1]
 var move := 0.0                  ## how fast we move (crosshair spread)
 
+## Two layers: the panels (targets, team, gun card, role tag, hints) redraw
+## only when what they show changes; the live layer (crosshair, markers,
+## banners, vignettes) redraws every frame. `_ci` is the layer being painted.
+var _panels: Control
+var _live: Control
+var _ci: CanvasItem
+var _panels_key := 0
+
+var _result: Array = []          ## room clear card: [title, [[label, value], ...]]
+var _result_k := 0.0             ## 0 hidden .. 1 shown
 var _hit_t := 0.0                ## hit marker
 var _down_t := 0.0               ## red flash when we go down
 var _pop := 0.0                  ## target counter bump
@@ -54,6 +64,9 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	# Bundled, so text looks the same everywhere and needs no system fonts.
 	font = preload("res://assets/fonts/Anton-Regular.ttf")
+	_ci = self
+	_panels = _layer(_paint_panels)
+	_live = _layer(_paint_live)
 
 
 func _process(delta: float) -> void:
@@ -69,7 +82,35 @@ func _process(delta: float) -> void:
 	if key != _last_gun_key:
 		_last_gun_key = key
 		_gun_flash = 1.0
-	queue_redraw()
+	var panels := hash([targets, kinds_left, team, gun_line, gun_line_col, bullet_line, gun_loaded, role, attempt,
+		best, room_no, top_label, tut_title, tut_text, tut_hint, ping_ms, spectating, size,
+		snappedf(_pop, 0.05), snappedf(_gun_flash, 0.05)])
+	if panels != _panels_key:
+		_panels_key = panels
+		_panels.queue_redraw()
+	_live.queue_redraw()
+
+
+func _layer(paint: Callable) -> Control:
+	var c := Control.new()
+	c.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	c.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	c.draw.connect(func():
+		_ci = c
+		paint.call())
+	add_child(c)
+	return c
+
+
+## The room-clear card: a title and a few [label, value] stats.
+func show_result(title: String, stats: Array) -> void:
+	_result = [title, stats]
+	_result_k = 0.0
+	create_tween().tween_property(self, "_result_k", 1.0, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT).set_delay(0.5)
+
+
+func clear_result() -> void:
+	_result = []
 
 
 ## A kill by our bullet: an X flashes on the crosshair.
@@ -110,20 +151,17 @@ func _next_banner() -> void:
 	_banner_tween.tween_callback(_next_banner)
 
 
-func _draw() -> void:
+func _paint_live() -> void:
 	var w := size.x
 	var h := size.y
 	if h < 1.0:
 		return
 	var s := h / 720.0
 	var role_col := Palette.role_color(role)
-
 	if slowmo > 0.2:
 		_draw_slowmo(w, s)
-
 	for m in markers:
 		_draw_marker(m[0], m[1], m[2], m[3], s)
-
 	if _down_t > 0.0:
 		_draw_vignette(w, h, Color(Palette.DANGER, 0.55 * _down_t))
 	elif not threats.is_empty() and spectating == "":
@@ -131,10 +169,21 @@ func _draw() -> void:
 		for t in threats:
 			worst = maxf(worst, t[1])
 		_draw_vignette(w, h, Color(Palette.DANGER, 0.18 * worst * (0.7 + 0.3 * sin(Time.get_ticks_msec() / 70.0))))
-
 	if spectating == "":
 		_draw_crosshair(Vector2(w, h) * 0.5, s, role_col)
+	if not _result.is_empty() and _result_k > 0.0:
+		_draw_result(w, h, s)
+	if _banner_x < 1.6:
+		_draw_banner(w, h, s)
 
+
+func _paint_panels() -> void:
+	var w := size.x
+	var h := size.y
+	if h < 1.0:
+		return
+	var s := h / 720.0
+	var role_col := Palette.role_color(role)
 	_draw_targets(s)
 	if tut_title == "":
 		# Attempt counter (Endless: room and best), tucked under the targets panel.
@@ -142,7 +191,6 @@ func _draw() -> void:
 		var sub_w := font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, int(20 * s)).x / s
 		_panel(Vector2(36, 112) * s, Vector2(maxf(170.0, sub_w + 56.0), 34) * s, Palette.INK.lightened(0.18))
 		_text(sub, Vector2(58, 137) * s, int(20 * s), Palette.SIGNAL, 0)
-
 	# Role tag, top right, sized to the word; teammates listed under it.
 	var role_name := "NORMAL" if role == 0 else "INVERTED"
 	var word_w := font.get_string_size(role_name, HORIZONTAL_ALIGNMENT_LEFT, -1, int(26 * s)).x
@@ -152,31 +200,26 @@ func _draw() -> void:
 	_draw_team(w, s)
 	if gun_line != "" and spectating == "":
 		_draw_gun_card(h, s)
-
 	if spectating != "":
 		_draw_spectating(w, h, s)
 	elif tut_title != "":
 		_draw_tutorial(w, h, s, role_col)
-
 	var hint := HINT if ping_ms < 0 else "%s     PING %d MS" % [HINT, ping_ms]
-	draw_string(font, Vector2(0, h - 10 * s), hint, HORIZONTAL_ALIGNMENT_RIGHT, w - 16 * s,
+	_ci.draw_string(font, Vector2(0, h - 10 * s), hint, HORIZONTAL_ALIGNMENT_RIGHT, w - 16 * s,
 		int(13 * s), Color(1, 1, 1, 0.8))
-
-	if _banner_x < 1.6:
-		_draw_banner(w, h, s)
 
 
 func _draw_vignette(w: float, h: float, col: Color) -> void:
 	var edge := minf(w, h) * 0.16
 	var clear := Color(col, 0.0)
 	# Four soft bands along the edges.
-	draw_polygon(PackedVector2Array([Vector2(0, 0), Vector2(w, 0), Vector2(w - edge, edge), Vector2(edge, edge)]),
+	_ci.draw_polygon(PackedVector2Array([Vector2(0, 0), Vector2(w, 0), Vector2(w - edge, edge), Vector2(edge, edge)]),
 		PackedColorArray([col, col, clear, clear]))
-	draw_polygon(PackedVector2Array([Vector2(0, h), Vector2(edge, h - edge), Vector2(w - edge, h - edge), Vector2(w, h)]),
+	_ci.draw_polygon(PackedVector2Array([Vector2(0, h), Vector2(edge, h - edge), Vector2(w - edge, h - edge), Vector2(w, h)]),
 		PackedColorArray([col, clear, clear, col]))
-	draw_polygon(PackedVector2Array([Vector2(0, 0), Vector2(edge, edge), Vector2(edge, h - edge), Vector2(0, h)]),
+	_ci.draw_polygon(PackedVector2Array([Vector2(0, 0), Vector2(edge, edge), Vector2(edge, h - edge), Vector2(0, h)]),
 		PackedColorArray([col, clear, clear, col]))
-	draw_polygon(PackedVector2Array([Vector2(w, 0), Vector2(w, h), Vector2(w - edge, h - edge), Vector2(w - edge, edge)]),
+	_ci.draw_polygon(PackedVector2Array([Vector2(w, 0), Vector2(w, h), Vector2(w - edge, h - edge), Vector2(w - edge, edge)]),
 		PackedColorArray([col, col, clear, clear]))
 
 
@@ -188,11 +231,11 @@ func _draw_crosshair(c: Vector2, s: float, role_col: Color) -> void:
 	var spread := (14.0 + move * 9.0) * s
 	for i in 4:
 		var d := Vector2.RIGHT.rotated(i * PI * 0.5)
-		draw_line(c + d * spread, c + d * (spread + 7.0 * s), Palette.INK, 5.0 * s)
-		draw_line(c + d * spread, c + d * (spread + 7.0 * s), ch_col, 2.0 * s)
-	draw_arc(c, 8.0 * s, 0, TAU, 24, Palette.INK, 5.0 * s)
-	draw_arc(c, 8.0 * s, 0, TAU, 24, ch_col, 2.0 * s)
-	draw_circle(c, 2.2 * s, ch_col)
+		_ci.draw_line(c + d * spread, c + d * (spread + 7.0 * s), Palette.INK, 5.0 * s)
+		_ci.draw_line(c + d * spread, c + d * (spread + 7.0 * s), ch_col, 2.0 * s)
+	_ci.draw_arc(c, 8.0 * s, 0, TAU, 24, Palette.INK, 5.0 * s)
+	_ci.draw_arc(c, 8.0 * s, 0, TAU, 24, ch_col, 2.0 * s)
+	_ci.draw_circle(c, 2.2 * s, ch_col)
 	# Threats: red arcs pointing at enemies winding up on us, tighter as they near.
 	var pulse := 0.6 + 0.4 * sin(Time.get_ticks_msec() / 60.0)
 	for t in threats:
@@ -200,18 +243,18 @@ func _draw_crosshair(c: Vector2, s: float, role_col: Color) -> void:
 		var u: float = t[1]
 		var r := (70.0 - 22.0 * u) * s
 		var half := 0.35 - 0.12 * u
-		draw_arc(c, r, ang - half, ang + half, 16, Palette.INK, (9.0 + 6.0 * u) * s)
-		draw_arc(c, r, ang - half, ang + half, 16, Color(Palette.DANGER, 0.6 + 0.4 * pulse), (5.0 + 5.0 * u) * s)
+		_ci.draw_arc(c, r, ang - half, ang + half, 16, Palette.INK, (9.0 + 6.0 * u) * s)
+		_ci.draw_arc(c, r, ang - half, ang + half, 16, Color(Palette.DANGER, 0.6 + 0.4 * pulse), (5.0 + 5.0 * u) * s)
 		var tip := c + Vector2.from_angle(ang) * (r + 12.0 * s)
 		var side := Vector2.from_angle(ang + PI * 0.5) * 7.0 * s
-		draw_colored_polygon(PackedVector2Array([tip + Vector2.from_angle(ang) * 9.0 * s, tip + side, tip - side]), Palette.DANGER)
+		_ci.draw_colored_polygon(PackedVector2Array([tip + Vector2.from_angle(ang) * 9.0 * s, tip + side, tip - side]), Palette.DANGER)
 	if _hit_t > 0.0:
 		var k := _hit_t / 0.28
 		var r0 := (10.0 + 10.0 * (1.0 - k)) * s
 		for i in 4:
 			var d := Vector2.from_angle(PI * 0.25 + i * PI * 0.5)
-			draw_line(c + d * r0, c + d * (r0 + 10.0 * s), Palette.INK, 6.0 * s)
-			draw_line(c + d * r0, c + d * (r0 + 10.0 * s), Color(Palette.TARGET, k), 3.0 * s)
+			_ci.draw_line(c + d * r0, c + d * (r0 + 10.0 * s), Palette.INK, 6.0 * s)
+			_ci.draw_line(c + d * r0, c + d * (r0 + 10.0 * s), Color(Palette.TARGET, k), 3.0 * s)
 	if prompt_key != "":
 		var fs := int(15 * s)
 		var kw := font.get_string_size(prompt_key, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
@@ -219,9 +262,9 @@ func _draw_crosshair(c: Vector2, s: float, role_col: Color) -> void:
 		var total := kw + 16.0 * s + 8.0 * s + tw
 		var at := c + Vector2(-total * 0.5, 44.0 * s)
 		var key_box := Rect2(at - Vector2(0, 15.0 * s), Vector2(kw + 16.0 * s, 21.0 * s))
-		draw_rect(key_box, Palette.INK)
-		draw_rect(key_box.grow(-2.0 * s), Color(1, 1, 1, 0.92))
-		draw_string(font, at + Vector2(8.0 * s, 1.0 * s), prompt_key, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Palette.INK)
+		_ci.draw_rect(key_box, Palette.INK)
+		_ci.draw_rect(key_box.grow(-2.0 * s), Color(1, 1, 1, 0.92))
+		_ci.draw_string(font, at + Vector2(8.0 * s, 1.0 * s), prompt_key, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Palette.INK)
 		_text(prompt_text, at + Vector2(kw + 24.0 * s, 1.0 * s), fs, ch_col, int(5 * s))
 
 
@@ -248,9 +291,9 @@ func _draw_targets(s: float) -> void:
 			var p := Vector2(x, 94) * s
 			var r := 5.5 * s
 			var pts := PackedVector2Array([p + Vector2(0, -r), p + Vector2(r, 0), p + Vector2(0, r), p + Vector2(-r, 0)])
-			draw_colored_polygon(pts, Palette.KIND_COLORS[k])
+			_ci.draw_colored_polygon(pts, Palette.KIND_COLORS[k])
 			pts.append(pts[0])
-			draw_polyline(pts, Palette.INK, 2.0 * s)
+			_ci.draw_polyline(pts, Palette.INK, 2.0 * s)
 			x += step
 
 
@@ -265,12 +308,12 @@ func _draw_team(w: float, s: float) -> void:
 		var width := tw + 92.0
 		var pos := Vector2(w / s - width - 24.0, y)
 		_panel(pos * s, Vector2(width, 30) * s, Palette.INK.lightened(0.12))
-		draw_rect(Rect2((pos + Vector2(14, 7)) * s, Vector2(6, 16) * s), col)
+		_ci.draw_rect(Rect2((pos + Vector2(14, 7)) * s, Vector2(6, 16) * s), col)
 		_text(name, (pos + Vector2(28, 21)) * s, fs, Color.WHITE if t[2] else Palette.MUTED.lightened(0.3), 0)
 		var icon := (pos + Vector2(width - 30, 15)) * s
 		if not t[2]:
-			draw_line(icon + Vector2(-5, -5) * s, icon + Vector2(5, 5) * s, Palette.DANGER, 3.0 * s)
-			draw_line(icon + Vector2(5, -5) * s, icon + Vector2(-5, 5) * s, Palette.DANGER, 3.0 * s)
+			_ci.draw_line(icon + Vector2(-5, -5) * s, icon + Vector2(5, 5) * s, Palette.DANGER, 3.0 * s)
+			_ci.draw_line(icon + Vector2(5, -5) * s, icon + Vector2(-5, 5) * s, Palette.DANGER, 3.0 * s)
 		elif t[3]:
 			_gun_icon(icon + Vector2(-6, 2) * s, 0.24 * s, gun_loaded)
 		y += 36.0
@@ -291,8 +334,8 @@ func _gun_icon(at: Vector2, k: float, loaded: bool) -> void:
 	var ink := Palette.INK
 	var steel := Palette.STEEL.lightened(0.35)
 	var barrel := Rect2(at + Vector2(10, -16) * k, Vector2(70, 12) * k)
-	draw_rect(barrel.grow(3 * k), ink)
-	draw_rect(barrel, steel)
+	_ci.draw_rect(barrel.grow(3 * k), ink)
+	_ci.draw_rect(barrel, steel)
 	var frame := PackedVector2Array([at + Vector2(-34, -20) * k, at + Vector2(14, -20) * k,
 		at + Vector2(14, 6) * k, at + Vector2(-34, 6) * k])
 	var grip := PackedVector2Array([at + Vector2(-34, 0) * k, at + Vector2(-12, 0) * k,
@@ -300,13 +343,37 @@ func _gun_icon(at: Vector2, k: float, loaded: bool) -> void:
 	for poly in [grip, frame]:
 		var outline: PackedVector2Array = poly.duplicate()
 		outline.append(poly[0])
-		draw_colored_polygon(poly, Color("7a4a2c") if poly == grip else steel)
-		draw_polyline(outline, ink, 4.0 * k)
+		_ci.draw_colored_polygon(poly, Color("7a4a2c") if poly == grip else steel)
+		_ci.draw_polyline(outline, ink, 4.0 * k)
 	var drum := at + Vector2(-10, -7) * k
-	draw_circle(drum, 15 * k, ink)
-	draw_circle(drum, 12 * k, Palette.FORWARD if loaded else Palette.MUTED)
+	_ci.draw_circle(drum, 15 * k, ink)
+	_ci.draw_circle(drum, 12 * k, Palette.FORWARD if loaded else Palette.MUTED)
 	if loaded:
-		draw_circle(drum, 5 * k, Color(1, 0.95, 0.8))
+		_ci.draw_circle(drum, 5 * k, Color(1, 0.95, 0.8))
+
+
+## Centre card after a room is cleared: slides up, stats in a row.
+func _draw_result(w: float, h: float, s: float) -> void:
+	var k := _result_k
+	var stats: Array = _result[1]
+	var size := Vector2(170.0 * stats.size() + 80.0, 150)
+	var pos := Vector2(w * 0.5 - size.x * 0.5 * s, h * 0.56 + (1.0 - k) * 80.0 * s)
+	var a := clampf(k, 0.0, 1.0)
+	modulate_panel(pos, size * s, a)
+	_text(_result[0], pos + Vector2(44, 52) * s, int(38 * s), Color(Palette.SIGNAL, a), int(8 * s))
+	for i in stats.size():
+		var at := pos + Vector2(48 + i * 170, 120) * s
+		_text(str(stats[i][1]), at, int(36 * s), Color(1, 1, 1, a), int(7 * s))
+		_ci.draw_string(font, at + Vector2(2, 22) * s, stats[i][0], HORIZONTAL_ALIGNMENT_LEFT, -1, int(14 * s),
+			Color(Palette.MUTED.lightened(0.55), a))
+
+
+func modulate_panel(pos: Vector2, sz: Vector2, a: float) -> void:
+	var slant := sz.y * 0.2
+	_ci.draw_colored_polygon(PackedVector2Array([pos + Vector2(slant, 0), pos + Vector2(sz.x, 0),
+		pos + Vector2(sz.x - slant, sz.y), pos + Vector2(0, sz.y)]), Color(Palette.INK, 0.92 * a))
+	_ci.draw_colored_polygon(PackedVector2Array([pos + Vector2(slant - 4, 0), pos + Vector2(slant + 2, 0),
+		pos + Vector2(2, sz.y), pos + Vector2(-4, sz.y)]), Color(Palette.SIGNAL, a))
 
 
 ## While dead: whose eyes you're watching through.
@@ -347,16 +414,16 @@ func _draw_slowmo(w: float, s: float) -> void:
 	var pos := Vector2(w * 0.5 - size.x * 0.5 * s, 62 * s)
 	var outer := PackedVector2Array([pos + Vector2(22, 0) * s, pos + Vector2(size.x, 0) * s,
 		pos + Vector2(size.x - 22, size.y) * s, pos + Vector2(0, size.y) * s])
-	draw_colored_polygon(outer, Color(Palette.INK, a))
+	_ci.draw_colored_polygon(outer, Color(Palette.INK, a))
 	var inset := PackedVector2Array([pos + Vector2(28, 6) * s, pos + Vector2(size.x - 8, 6) * s,
 		pos + Vector2(size.x - 28, size.y - 6) * s, pos + Vector2(8, size.y - 6) * s])
-	draw_colored_polygon(inset, Color(SLOW_COLOR.lerp(Color.WHITE, pulse * 0.35), a))
+	_ci.draw_colored_polygon(inset, Color(SLOW_COLOR.lerp(Color.WHITE, pulse * 0.35), a))
 	var text := "TIME SLOWED"
 	var fs := int(40 * s)
 	var tw := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	var at := pos + Vector2(size.x * 0.5 * s - tw * 0.5, 47 * s)
-	draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, int(9 * s), Color(Palette.INK, a))
-	draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(Color.WHITE, a))
+	_ci.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, int(9 * s), Color(Palette.INK, a))
+	_ci.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(Color.WHITE, a))
 
 
 func _draw_marker(p: Vector2, col: Color, label: String, on_screen: bool, s: float) -> void:
@@ -364,10 +431,10 @@ func _draw_marker(p: Vector2, col: Color, label: String, on_screen: bool, s: flo
 	var pts := PackedVector2Array([p + Vector2(0, -r), p + Vector2(r, 0), p + Vector2(0, r), p + Vector2(-r, 0)])
 	if not on_screen:
 		pts = PackedVector2Array([p + Vector2(0, -r * 1.3), p + Vector2(r * 1.3, r), p + Vector2(-r * 1.3, r)])
-	draw_colored_polygon(pts, col)
+	_ci.draw_colored_polygon(pts, col)
 	var closed := pts.duplicate()
 	closed.append(pts[0])
-	draw_polyline(closed, Palette.INK, 3.0 * s)
+	_ci.draw_polyline(closed, Palette.INK, 3.0 * s)
 	_text(label, p + Vector2(r + 4 * s, -r), int(15 * s), col, int(5 * s))
 
 
@@ -376,32 +443,32 @@ func _panel(pos: Vector2, sz: Vector2, fill: Color) -> void:
 	var slant := sz.y * 0.32
 	var outer := PackedVector2Array([pos + Vector2(slant, 0), pos + Vector2(sz.x, 0),
 		pos + Vector2(sz.x - slant, sz.y), pos + Vector2(0, sz.y)])
-	draw_colored_polygon(outer, Palette.INK)
+	_ci.draw_colored_polygon(outer, Palette.INK)
 	var b := sz.y * 0.09
 	var inner := PackedVector2Array([pos + Vector2(slant + b, b), pos + Vector2(sz.x - b * 1.4, b),
 		pos + Vector2(sz.x - slant - b, sz.y - b), pos + Vector2(b * 1.4, sz.y - b)])
-	draw_colored_polygon(inner, fill)
+	_ci.draw_colored_polygon(inner, fill)
 
 
 func _text(t: String, pos: Vector2, fs: int, col: Color, outline: int) -> void:
 	if outline > 0:
-		draw_string_outline(font, pos, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, outline, Palette.INK)
-	draw_string(font, pos, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
+		_ci.draw_string_outline(font, pos, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, outline, Palette.INK)
+	_ci.draw_string(font, pos, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, col)
 
 
 func _draw_banner(w: float, h: float, s: float) -> void:
 	# High and compact so it never covers the crosshair.
-	draw_set_transform(Vector2(w * (0.5 + _banner_x), h * 0.3), -0.07, Vector2(s, s) * 0.5)
+	_ci.draw_set_transform(Vector2(w * (0.5 + _banner_x), h * 0.3), -0.07, Vector2(s, s) * 0.5)
 	var half := 1200.0
-	draw_colored_polygon(PackedVector2Array([Vector2(-half, -104), Vector2(half, -124),
+	_ci.draw_colored_polygon(PackedVector2Array([Vector2(-half, -104), Vector2(half, -124),
 		Vector2(half, 104), Vector2(-half, 124)]), Palette.INK)
-	draw_colored_polygon(PackedVector2Array([Vector2(-half, -86), Vector2(half, -104),
+	_ci.draw_colored_polygon(PackedVector2Array([Vector2(-half, -86), Vector2(half, -104),
 		Vector2(half, 84), Vector2(-half, 102)]), _banner_color)
-	draw_colored_polygon(PackedVector2Array([Vector2(-half, 64), Vector2(half, 46),
+	_ci.draw_colored_polygon(PackedVector2Array([Vector2(-half, 64), Vector2(half, 46),
 		Vector2(half, 58), Vector2(-half, 76)]), Color(1, 1, 1, 0.9))
 	var fs := 116
 	while fs > 36 and font.get_string_size(_banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > 1000:
 		fs -= 8
 	var tw := font.get_string_size(_banner_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 	_text(_banner_text, Vector2(-tw * 0.5, fs * 0.36), fs, Color.WHITE, 20)
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	_ci.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)

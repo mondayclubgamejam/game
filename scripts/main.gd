@@ -133,6 +133,7 @@ var _round_mode := Lobby.DEFAULT_MAP  ## the map / mode of the round being playe
 var _tut_step := 0             ## tutorial B: the current step (0-5)
 var _tut_mark := 0             ## tutorial B: recalls done when the step began
 var _recalls_done := 0         ## bullets recalled into the gun this round
+var _round_started := 0        ## Time.get_ticks_msec() when this round began
 var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
 var _party := {}               ## host: match lobby members, peer id -> {name, role, ready}
 var _party_order: Array[int] = []
@@ -915,6 +916,8 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 	_tut_step = clampi(number - 1, 0, TUT_STEPS.size() - 1) if mode == "tutorial_b" else 0
 	_tut_mark = 0
 	_recalls_done = 0
+	_round_started = Time.get_ticks_msec()
+	hud.clear_result()
 	roster = team
 	if Maps.is_fixed(mode):
 		room = Maps.build(mode, team.size())
@@ -1069,6 +1072,7 @@ func room_cleared() -> void:
 		hud.banner("TRAINING COMPLETE", Palette.ENEMY, TUT_BANNER_HOLD)
 	else:
 		hud.banner("CLEAR!", Palette.ENEMY)
+		_show_room_result()
 	_log_event("room cleared")
 	if Maps.is_fixed(_round_mode):
 		# A hand-made map is done once it's cleared: back to the match lobby.
@@ -1154,6 +1158,19 @@ func _finish_game(note: String) -> void:
 		_host_show_waiting(note)
 	else:
 		_party_broadcast(note)
+
+
+## The card shown between rooms: time, enemies, tries (and Endless best).
+func _show_room_result() -> void:
+	var secs := (Time.get_ticks_msec() - _round_started) / 1000
+	var stats := [["TIME", "%d:%02d" % [secs / 60, secs % 60]], ["ENEMIES DOWN", enemies.size()],
+		["TRIES", attempt], ["LOOPS", _recalls_done]]
+	var title := "ROOM %d CLEARED" % room_no
+	if Maps.is_fixed(_round_mode):
+		title = "%s CLEARED" % Maps.display_name(_round_mode)
+	elif _round_mode == "endless":
+		stats[2] = ["BEST ROOM", maxi(hud.best, room_no + 1)]
+	hud.show_result(title, stats)
 
 
 ## Host -> everyone: a player left mid-game and the rest carry on.

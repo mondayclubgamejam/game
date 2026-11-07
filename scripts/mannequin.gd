@@ -18,6 +18,7 @@ var skeleton: Skeleton3D
 var swing := 0.0             ## current leg swing (radians), for arm counter-swing
 
 var _bones := {}
+var _rests := {}             ## bone -> [index, rest * global_rest^-1, global_rest] (pose() runs a lot)
 var _phase := 0.0
 var _amount := 0.0
 
@@ -66,12 +67,15 @@ func bend(bone_name: String, angle: float) -> void:
 ## parent. x > 0 swings a hanging limb forward, y > 0 turns it toward the
 ## body's left, z > 0 swings it toward the body's right (+X).
 func pose(bone_name: String, euler: Vector3) -> void:
-	var bone := _bone(bone_name)
-	if bone < 0:
-		return
-	var rest := skeleton.get_bone_rest(bone).basis.get_rotation_quaternion()
-	var g := skeleton.get_bone_global_rest(bone).basis.get_rotation_quaternion()
-	skeleton.set_bone_pose_rotation(bone, rest * (g.inverse() * Quaternion.from_euler(euler) * g))
+	var r: Array = _rests.get(bone_name, [])
+	if r.is_empty():
+		var bone := _bone(bone_name)
+		if bone < 0:
+			return
+		var g := skeleton.get_bone_global_rest(bone).basis.get_rotation_quaternion()
+		r = [bone, skeleton.get_bone_rest(bone).basis.get_rotation_quaternion() * g.inverse(), g]
+		_rests[bone_name] = r
+	skeleton.set_bone_pose_rotation(r[0], r[1] * Quaternion.from_euler(euler) * r[2])
 
 
 ## Moves a bone from its rest position (the hips: the whole body).
