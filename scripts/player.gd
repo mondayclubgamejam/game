@@ -7,6 +7,7 @@ extends CharacterBody3D
 ## you) and jump (Space).
 
 const Palette := preload("res://scripts/palette.gd")
+const Clock := preload("res://scripts/clock.gd")
 
 const SPEED := 6.5
 const CARRY_SPEED := 3.2     ## the gun is heavy
@@ -20,7 +21,6 @@ const CROUCH_EYE := 1.0
 const HEIGHT := 1.8
 const CROUCH_HEIGHT := 1.15
 const CROUCH_RATE := 9.0     ## how fast crouching eases in and out
-const MOVING_SPEED := 0.4    ## slower than this on the ground counts as standing still
 const MOUSE_SENS := 0.0022
 const LAYER_PLAYER := 4
 const MASK_WORLD := 1
@@ -46,6 +46,8 @@ var head: Node3D
 var camera: Camera3D
 var hand_anchor: Node3D      ## where a remote player's gun is drawn
 
+var _game_vel := Vector3.ZERO  ## velocity in game time (real velocity = this x the game clock)
+var _wants_move := false       ## pressing a move key or in the air: counts as moving
 var _shape: CollisionShape3D
 var _capsule: CapsuleShape3D
 var _crouch_t := 0.0         ## 0 standing .. 1 crouched, eased
@@ -156,18 +158,27 @@ func _local_move(delta: float) -> void:
 	if crouching:
 		speed = minf(speed, CROUCH_SPEED)
 
+	# Movement runs on the game clock like everything else, so slow motion
+	# slows players too. Whether you're "moving" comes from your keys, not
+	# your speed: pressing a key is what speeds time back up.
 	var on_floor := is_on_floor()
+	_wants_move = input != Vector2.ZERO or wants_jump or not on_floor
+	var t := Clock.scale
+	var game_delta := delta * t
 	var wish := (global_basis * Vector3(input.x, 0.0, input.y)) * speed
 	var accel := ACCEL if on_floor else AIR_ACCEL
-	var flat := Vector3(velocity.x, 0.0, velocity.z).move_toward(wish, accel * delta)
-	velocity.x = flat.x
-	velocity.z = flat.z
+	var flat := Vector3(_game_vel.x, 0.0, _game_vel.z).move_toward(wish, accel * game_delta)
+	_game_vel.x = flat.x
+	_game_vel.z = flat.z
 	if on_floor:
-		velocity.y = JUMP_VELOCITY if wants_jump and not crouching else 0.0
+		_game_vel.y = JUMP_VELOCITY if wants_jump and not crouching else 0.0
 	else:
-		velocity.y -= GRAVITY * delta
+		_game_vel.y -= GRAVITY * game_delta
+	velocity = _game_vel * t
 	move_and_slide()
-	move_amount = flat.length() / SPEED
+	if t > 0.01:
+		_game_vel = velocity / t  # keep what walls and floors did to us
+	move_amount = Vector2(velocity.x, velocity.z).length() / SPEED
 
 
 func _apply_crouch(delta: float) -> void:
@@ -189,7 +200,7 @@ func is_moving() -> bool:
 		return false
 	if not is_local:
 		return _net_moving
-	return Vector2(velocity.x, velocity.z).length() > MOVING_SPEED or not is_on_floor()
+	return _wants_move
 
 
 func net_flags() -> int:
@@ -232,6 +243,7 @@ func place(pos: Vector3, yaw: float) -> void:
 	rotation.y = yaw
 	head.rotation.x = 0.0
 	velocity = Vector3.ZERO
+	_game_vel = Vector3.ZERO
 	_net_pos = pos
 	_net_vel = Vector3.ZERO
 	_net_yaw = yaw

@@ -71,7 +71,7 @@ func _draw() -> void:
 	var s := h / 720.0
 	var role_col := Palette.role_color(role)
 
-	if slowmo > 0.35:
+	if slowmo > 0.2:
 		_draw_slowmo(w, s)
 
 	for m in markers:
@@ -124,17 +124,27 @@ func _draw_spectating(w: float, h: float, s: float) -> void:
 	_text("CLICK FOR THE NEXT TEAMMATE", pos + Vector2(46, 62) * s, int(15 * s), Palette.INK, 0)
 
 
+const SLOW_COLOR := Color("8fd3ff")
+
+
+## A bold banner across the top while time is slowed, gently pulsing.
 func _draw_slowmo(w: float, s: float) -> void:
-	var a := clampf((slowmo - 0.35) / 0.4, 0.0, 1.0)
-	var pos := Vector2(w * 0.5 - 95 * s, 66 * s)  # top centre, below markers pinned to the edge
-	var fill := Color(Palette.MUTED.lightened(0.35), a)
-	var ink := Color(Palette.INK, a)
-	draw_colored_polygon(PackedVector2Array([pos + Vector2(14, 0) * s, pos + Vector2(190, 0) * s,
-		pos + Vector2(176, 40) * s, pos + Vector2(0, 40) * s]), ink)
-	draw_colored_polygon(PackedVector2Array([pos + Vector2(18, 4) * s, pos + Vector2(184, 4) * s,
-		pos + Vector2(172, 36) * s, pos + Vector2(6, 36) * s]), fill)
-	draw_string(font, pos + Vector2(30, 31) * s, "TIME SLOWED", HORIZONTAL_ALIGNMENT_LEFT, -1,
-		int(26 * s), Color(Color.WHITE, a))
+	var a := clampf((slowmo - 0.2) / 0.3, 0.0, 1.0)
+	var pulse := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 260.0)
+	var size := Vector2(380, 62)
+	var pos := Vector2(w * 0.5 - size.x * 0.5 * s, 62 * s)
+	var outer := PackedVector2Array([pos + Vector2(22, 0) * s, pos + Vector2(size.x, 0) * s,
+		pos + Vector2(size.x - 22, size.y) * s, pos + Vector2(0, size.y) * s])
+	draw_colored_polygon(outer, Color(Palette.INK, a))
+	var inset := PackedVector2Array([pos + Vector2(28, 6) * s, pos + Vector2(size.x - 8, 6) * s,
+		pos + Vector2(size.x - 28, size.y - 6) * s, pos + Vector2(8, size.y - 6) * s])
+	draw_colored_polygon(inset, Color(SLOW_COLOR.lerp(Color.WHITE, pulse * 0.35), a))
+	var text := "TIME SLOWED"
+	var fs := int(40 * s)
+	var tw := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var at := pos + Vector2(size.x * 0.5 * s - tw * 0.5, 47 * s)
+	draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, int(9 * s), Color(Palette.INK, a))
+	draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(Color.WHITE, a))
 
 
 func _draw_marker(p: Vector2, col: Color, label: String, on_screen: bool, s: float) -> void:

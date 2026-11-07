@@ -62,7 +62,7 @@ const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS)
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
 const SERVER_NAME := "one-gun-one-bullet"       ## the name inside that certificate
 const SLOW_IN_RATE := 3.0     ## how fast time eases into slow motion (per second)
-const SLOW_OUT_RATE := 10.0   ## and how fast it snaps back when someone moves
+const SLOW_OUT_RATE := 4.0    ## and how fast it speeds back up when someone moves
 const UDP_TRY_SECONDS := 2.5   ## how long to try UDP before falling back to WebSocket
 const WS_TRY_SECONDS := 8.0
 
@@ -864,10 +864,11 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array) -> void:
 		p.setup(entry[0], entry[1], entry[0] == me)
 		p.player_name = entry[2]
 		round_root.add_child(p)
-		p.place(RoomGen.cell_center(room.spawns[i]) + Vector3(0, 0.05, 0), PI)  # face into the room
+		p.place(RoomGen.cell_center(room.spawns[i]) + Vector3(0, 0.05, 0), PI)
 		players[entry[0]] = p
 		if first_normal == 0 and entry[1] == ROLE_FORWARD:
 			first_normal = entry[0]
+	_face_teammates()
 	local_player = players.get(me)
 
 	for i in room.enemy_cells.size():
@@ -1071,6 +1072,20 @@ func _unhandled_input(event: InputEvent) -> void:
 			request_restart()
 		else:
 			request_restart.rpc_id(1)
+
+
+## At the start of a round everyone turns to face their teammates (with two
+## players, each other).
+func _face_teammates() -> void:
+	for p in players.values():
+		var center := Vector3.ZERO
+		for other in players.values():
+			if other != p:
+				center += other.global_position
+		center /= maxf(players.size() - 1, 1)
+		var d: Vector3 = center - p.global_position
+		if Vector2(d.x, d.z).length() > 0.1:
+			p.place(p.global_position, atan2(-d.x, -d.z))
 
 
 ## Everyone else in this round.
@@ -1540,7 +1555,10 @@ func _update_clock(delta: float) -> void:
 		else:
 			target = 1.0 if local_player != null and local_player.is_moving() else _host_time_target
 	var rate := SLOW_OUT_RATE if target > Clock.scale else SLOW_IN_RATE
+	var was_slow := Clock.scale < 0.6
 	Clock.scale = move_toward(Clock.scale, target, rate * delta)
+	if not was_slow and Clock.scale < 0.6 and local_player != null:
+		hud.banner("TIME SLOWS", Hud.SLOW_COLOR)  # big cut-in the moment it kicks in
 	fx.set_slowmo(inverse_lerp(1.0, Clock.SLOW, Clock.scale))
 
 

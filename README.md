@@ -46,7 +46,7 @@ The aim line shows where the shot or recall will go: orange for a shot, blue for
 
 ### How it plays
 
-- **Optional: time slows down while both players stand still** (the host turns it on in the match lobby), and runs at normal speed as soon as either of you moves. Enemies, bullets, enemy shots and thrown guns all crawl, and the screen drains to a cool grey while it lasts. Use it to plan a shot, line up a recall, or watch an enemy bullet coming.
+- **Optional: time slows down while everyone stands still** (the host turns it on in the match lobby). Everything slows: players, enemies, bullets, enemy shots and thrown guns. A **TIME SLOWS** cut-in, a **TIME SLOWED** banner and a cool grey screen make it obvious. Pressing any movement key speeds time back up over a quarter of a second. Use it to plan a shot, line up a recall, or watch an enemy bullet coming.
 - **Enemies come in three kinds**, told apart by silhouette and colour (weapon and belt): **gunmen** (red, pistol; shoot from range, then take a while to reload), **swordsmen** (steel, long sword) and **brawlers** (lime, big fists). An enemy flashes white while it winds up an attack.
 - **Crates** are waist-high cover: crouch behind them, jump on them, and note that bullets stick in them like walls.
 - The **ATTEMPT** counter under TARGETS counts your tries at the current room; it resets when you clear it.
