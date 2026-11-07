@@ -19,17 +19,21 @@ Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs
 
 ### Playing together
 
-- One player clicks **HOST (A)**.
-- On the same network, the other player sees **JOIN <NAME>'S GAME** appear under *Games on your network* within a second and clicks it.
-- Otherwise, type the host's IP (shown at the bottom of the host's lobby) and click **JOIN (B)**. Over the internet, the host forwards UDP port **7777**.
+- One player clicks **HOST A GAME**. The hosting screen shows their address and, if needed, the exact firewall command for their machine.
+- On the same network, the other player sees **JOIN <NAME>** appear under *Games on your network* within a second or two, and clicks it.
+- Otherwise, type the host's address under *Or join by address* (`192.168.0.12`, or `192.168.0.12:7777`). Over the internet, the host forwards UDP port **7777**.
 
-Two windows on one machine work too: they find each other the same way.
+Two windows on one machine work too.
 
-**Firewall:** the game uses UDP **7777** (game) and **7778** (finding games on the LAN). On Windows, allow the game when the firewall asks. On Linux with a firewall on (for example `ufw` on Ubuntu), allow the ports on both machines:
+**Firewall: only the host needs to do anything.** The game uses UDP **7777** (the game) and **7778** (finding games on the LAN). Joining players need no firewall changes: the lobby asks every machine on the local network directly, and the answers come back as replies, which firewalls let through. The **host** has to let both ports in:
 
-```sh
-sudo ufw allow 7777:7778/udp
-```
+| Host OS | Command |
+|---|---|
+| Rocky / RHEL / Fedora (firewalld) | `sudo firewall-cmd --add-port=7777/udp --add-port=7778/udp` (add `--permanent` and reload to keep it after a reboot) |
+| Ubuntu / Debian (ufw) | `sudo ufw allow 7777/udp && sudo ufw allow 7778/udp` |
+| Windows | Click **Allow** (private networks) when Windows Defender Firewall asks the first time you host |
+
+If you can't change the host's firewall (for example on a locked-down managed machine), let the other player host instead.
 
 ## Building an executable (Linux or Windows)
 
@@ -45,11 +49,19 @@ The build works out which OS you're on and builds for it:
 | `build/linux/OneGunOneBullet.x86_64` | 64-bit Linux |
 | `build/windows/OneGunOneBullet.exe` | 64-bit Windows |
 
-Each is a **single self-contained file** with the game packed inside (about 75 MB on Linux, 110 MB on Windows). **Running it needs nothing else, not even Godot**: copy it over and run it (on Linux, `chmod +x` it first if needed). To build for the other OS too, pass `--target windows`, `--target linux` or `--target all`. Godot can cross-build either one from either OS.
+Each is a **single self-contained file** with the game packed inside (about 75 MB on Linux, 110 MB on Windows). **Running it needs nothing else, not even Godot**: copy it over and run it (on Linux, `chmod +x` it first if needed). To build for the other OS too, pass `-target windows`, `-target linux` or `-target all`; either OS can build both.
 
-Building only needs **Python 3** ([python.org](https://www.python.org/downloads/) on Windows). The build uses Godot 4.7 from `$GODOT` or your PATH if you have it. Otherwise it downloads the official Godot 4.7.2 once into a cache folder (`~/.cache/one-gun-one-bullet`, or `%LOCALAPPDATA%\one-gun-one-bullet` on Windows) and keeps its settings there too. Export templates come out of Godot's 1.3 GB all-platform bundle via HTTP range requests, so only the ~35 MB you need is downloaded. A first build from a fresh clone takes about 30 seconds.
+**Building needs nothing installed either.** `build.sh` and `build.bat` run a small prebuilt builder from `tools/bin/` (a static Go program, source in `tools/builder/`): no Python, unzip or curl. It uses Godot 4.7 from `$GODOT` or your PATH if you have it. Otherwise it downloads the official Godot 4.7.2 once into your cache folder (`~/.cache/one-gun-one-bullet`, or `%LOCALAPPDATA%\one-gun-one-bullet` on Windows) and keeps Godot's settings there too. Export templates are read straight out of Godot's 1.3 GB all-platform bundle with HTTP range requests, so only the ~35-40 MB per platform you build for is downloaded. A first build takes about 30 seconds (tested on a bare Rocky Linux 8).
 
-On Windows, the first time you host, Windows Defender Firewall asks whether to allow the game on the network. Allow it on **private networks**, or the other player can't find or join you.
+To change the builder, edit `tools/builder/main.go` and rebuild the binaries with Go 1.21 or newer:
+
+```sh
+cd tools/builder
+for t in linux/amd64 linux/arm64 windows/amd64; do
+  os=${t%/*}; arch=${t#*/}; ext=; [ $os = windows ] && ext=.exe
+  CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath -ldflags="-s -w" -o ../bin/onegun-build-$os-$arch$ext .
+done
+```
 
 ## Command-line options
 
@@ -67,7 +79,7 @@ Pass these after `--`, for example `godot --path . -- --host`:
 
 ## Testing
 
-Logic tests (room generation, recall curve, throw arcs):
+Logic tests (room generation, recall curve, throw arcs, LAN discovery packets):
 
 ```sh
 godot --headless --path . --script res://tests/test_runner.gd
@@ -87,7 +99,7 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - `scripts/main.gd`: entry point and the **only network router**. Every RPC lives here, so node paths always match on both machines, and moving to a central server later means changing who runs the host branches in this one file.
 - Latency: each player owns **their own movement** and **the bullet they launch**, and decides **hits on themselves**, so nothing you do waits on the network. Only small events cross the wire. The room is rebuilt from a seed, and straight shots and gun throws are re-simulated locally and fast-forwarded by half the measured ping. State streams use unreliable channels separate from reliable events, and the network is polled right after each physics tick.
 - Memory and compute: the walls are one MultiMesh plus one static body, the floor is one shader-tiled plane, enemy bullets, debris and aim lines are pooled MultiMeshes, meshes and materials are shared, and idle systems switch off their per-frame processing.
-- `scripts/lan_discovery.gd`: LAN discovery. Hosts broadcast a small UDP beacon on port 7778 once a second until a partner joins; the lobby listens and lists them.
+- `scripts/lan_discovery.gd`: LAN discovery. The host answers on UDP 7778 and broadcasts a beacon once a second until a partner joins. The lobby sends small queries to the broadcast addresses and directly to every address in its local /24 networks (about 200 a second); the answers are replies to its own packets, so they get through the joiner's firewall.
 - `scripts/room_gen.gd`: deterministic procedural room (always fully connected, enemies kept away from the spawn).
 - `scripts/bullet.gd`, `gun.gd`, `enemy.gd`, `player.gd`: gameplay objects.
 - `scripts/hud.gd`, `hand.gd`, `lobby.gd`, `world_fx.gd`, `shaders/comic.gdshader`: the comic-print look (ink outlines, halftone, posterize, rewind tint).
@@ -98,7 +110,9 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - `scripts/`: GDScript files
 - `shaders/`: comic post-process, floor and pulse-ring shaders
 - `tests/`: headless logic tests
-- `build.sh`, `build.bat`, `tools/build.py`: one-command builds for Linux and Windows
+- `build.sh`, `build.bat`: one-command builds for Linux and Windows
+- `tools/builder/`, `tools/bin/`: the Go build tool and its prebuilt static binaries
+- `assets/fonts/`: Anton (SIL Open Font License, see `OFL-Anton.txt`), bundled so no system fonts are needed
 - `export_presets.cfg`: Linux and Windows export presets (single file, game embedded)
 - `game-style/`: style brief and reference screenshots (ignored by Godot)
 - `assets/`: art, audio, fonts

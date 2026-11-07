@@ -20,6 +20,7 @@ func _initialize() -> void:
 	test_lan_beacon_round_trip()
 	test_lan_beacon_rejects_foreign_packets()
 	test_lan_broadcast_targets()
+	test_lan_private_ranges_and_sweep()
 	print("\n%d passed, %d failed" % [_passed, _failed])
 	quit(1 if _failed > 0 else 0)
 
@@ -109,19 +110,25 @@ func test_throw_reaches_target() -> void:
 
 
 func test_lan_beacon_round_trip() -> void:
-	var info := Lan.decode(Lan.encode(7777, "NESTOR"))
+	var info := Lan.decode(Lan.encode_host(7777, "NESTOR", 42))
+	check(info.get("t") == "h", "host packet decodes as a host")
 	check(info.get("port") == 7777, "beacon keeps the port")
 	check(info.get("name") == "NESTOR", "beacon keeps the name")
-	check(Lan.decode(Lan.encode(7777, "N", 42)).get("id") == 42, "beacon keeps the session id")
-	var long_name := Lan.decode(Lan.encode(7777, "X".repeat(100)))
+	check(info.get("id") == 42, "beacon keeps the session id")
+	check(Lan.decode(Lan.encode_query()).get("t") == "q", "query decodes as a query")
+	var long_name := Lan.decode(Lan.encode_host(7777, "X".repeat(100), 1))
 	check(str(long_name.get("name")).length() == 32, "beacon names are capped")
 
 
 func test_lan_beacon_rejects_foreign_packets() -> void:
 	check(Lan.decode("hello".to_utf8_buffer()).is_empty(), "plain text ignored")
-	check(Lan.decode(JSON.stringify({"g": "OTHER", "port": 7777}).to_utf8_buffer()).is_empty(), "other games ignored")
-	check(Lan.decode(JSON.stringify({"g": Lan.MAGIC, "port": 0}).to_utf8_buffer()).is_empty(), "bad port ignored")
-	check(Lan.decode(JSON.stringify({"g": Lan.MAGIC, "port": 70000}).to_utf8_buffer()).is_empty(), "port out of range ignored")
+	check(Lan.decode(PackedByteArray()).is_empty(), "empty packet ignored")
+	check(Lan.decode(JSON.stringify({"g": "OTHER", "t": "q"}).to_utf8_buffer()).is_empty(), "other games ignored")
+	check(Lan.decode(JSON.stringify({"g": "OGOB1", "port": 7777}).to_utf8_buffer()).is_empty(), "old protocol ignored")
+	check(Lan.decode(JSON.stringify({"g": Lan.MAGIC, "t": "h", "port": 0}).to_utf8_buffer()).is_empty(), "bad port ignored")
+	check(Lan.decode(JSON.stringify({"g": Lan.MAGIC, "t": "h", "port": 70000}).to_utf8_buffer()).is_empty(), "port out of range ignored")
+	check(Lan.decode(JSON.stringify({"g": Lan.MAGIC, "t": "x"}).to_utf8_buffer()).is_empty(), "unknown type ignored")
+	check(Lan.decode(JSON.stringify([1, 2]).to_utf8_buffer()).is_empty(), "non-object JSON ignored")
 	var big := PackedByteArray()
 	big.resize(4096)
 	check(Lan.decode(big).is_empty(), "oversized packet ignored")
@@ -130,8 +137,22 @@ func test_lan_beacon_rejects_foreign_packets() -> void:
 func test_lan_broadcast_targets() -> void:
 	var targets := Lan.broadcast_targets()
 	check(targets.has("255.255.255.255"), "always broadcasts to 255.255.255.255")
-	check(targets.has("127.0.0.1"), "also beacons to this machine")
+	check(targets.has("127.0.0.1"), "also asks this machine")
 	for t in targets:
 		if t != "127.0.0.1":
 			check(t.ends_with(".255"), "broadcast target %s ends in .255" % t)
-			check(not t.begins_with("127."), "no loopback broadcast")
+
+
+func test_lan_private_ranges_and_sweep() -> void:
+	for ip in ["10.0.0.5", "192.168.1.20", "172.16.0.1", "172.31.255.1"]:
+		check(Lan.is_private_ipv4(ip), "%s is private" % ip)
+	for ip in ["8.8.8.8", "172.32.0.1", "100.106.214.117", "fe80::1", "127.0.0.1"]:
+		check(not Lan.is_private_ipv4(ip), "%s is not swept" % ip)
+	var sweep := Lan.sweep_targets()
+	var mine := Lan.local_ipv4()
+	check(sweep.size() <= 254 * Lan.MAX_SWEEP_NETWORKS, "sweep is bounded")
+	for ip in sweep:
+		check(Lan.is_private_ipv4(ip), "sweep only hits private addresses (%s)" % ip)
+		check(not mine.has(ip), "sweep skips this machine's own address")
+		if _failed > 0:
+			return

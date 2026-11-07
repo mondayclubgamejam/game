@@ -28,10 +28,8 @@ var _banner_tween: Tween
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var f := SystemFont.new()
-	f.font_names = PackedStringArray(["Anton", "Impact", "Arial Black", "Montserrat", "DejaVu Sans"])
-	f.font_weight = 900
-	font = f
+	# Bundled, so text looks the same everywhere and needs no system fonts.
+	font = preload("res://assets/fonts/Anton-Regular.ttf")
 
 
 func _process(_delta: float) -> void:

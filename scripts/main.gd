@@ -111,7 +111,8 @@ func _ready() -> void:
 	lan = LanDiscovery.new()
 	add_child(lan)
 	lan.hosts_changed.connect(_on_lan_hosts)
-	_listen_lan()
+	lobby.cancel_requested.connect(func(): _back_to_lobby("", false))
+	_search_lan()
 
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -163,27 +164,44 @@ func host_game(port: int) -> void:
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_server(port, 1)
 	if err != OK:
-		lobby.set_status("Could not host on port %d (error %d)." % [port, err], false)
+		lobby.show_menu("Couldn't host on port %d (error %d). Is another copy already hosting?" % [port, err], true)
 		return
 	multiplayer.multiplayer_peer = peer
 	_net_role = "host"
-	lan.stop_listening()
-	lan.start_advertising(port, lobby.player_name())
-	lobby.set_status("Hosting on port %d. Waiting for your partner..." % port, true)
+	lan.stop_searching()
+	var answering := lan.start_advertising(port, lobby.player_name())
+	lobby.show_hosting(port, LanDiscovery.best_addresses(), _firewall_hint(port), answering)
 	_log_event("hosting on port %d" % port)
+
+
+## The exact command to open the game's ports on this machine's firewall.
+func _firewall_hint(port: int) -> String:
+	var ports := "%d-%d" % [port, LanDiscovery.PORT] if port + 1 == LanDiscovery.PORT \
+		else "%d and %d" % [port, LanDiscovery.PORT]
+	if OS.has_feature("windows"):
+		return "If Windows asks, allow the game on private networks."
+	if FileAccess.file_exists("/usr/bin/firewall-cmd"):
+		return "If your partner can't see you, open UDP %s:\nsudo firewall-cmd --add-port=%d/udp --add-port=%d/udp" \
+			% [ports, port, LanDiscovery.PORT]
+	if FileAccess.file_exists("/usr/sbin/ufw"):
+		return "If your partner can't see you, open UDP %s:\nsudo ufw allow %d/udp && sudo ufw allow %d/udp" \
+			% [ports, port, LanDiscovery.PORT]
+	return "If your partner can't see you, let UDP %s through your firewall." % ports
 
 
 func join_game(address: String, port: int) -> void:
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_client(address, port)
 	if err != OK:
-		lobby.set_status("Could not start connection (error %d)." % err, false)
+		lobby.show_menu("Couldn't start a connection to %s (error %d)." % [address, err], true)
 		return
+	# Give up after ~6 s instead of ENet's default ~30 s.
+	peer.get_peer(1).set_timeout(0, 3000, 6000)
 	multiplayer.multiplayer_peer = peer
 	_net_role = "client"
 	_auto_join_lan = false
-	lan.stop_listening()
-	lobby.set_status("Connecting to %s:%d..." % [address, port], true)
+	lan.stop_searching()
+	lobby.show_busy("CONNECTING TO %s" % address)
 
 
 func _on_peer_connected(id: int) -> void:
@@ -193,21 +211,18 @@ func _on_peer_connected(id: int) -> void:
 
 
 func _on_connected() -> void:
-	lobby.set_status("Connected. Waiting for the host...", true)
+	lobby.show_busy("CONNECTED. STARTING...")
 	_log_event("connected as %d" % multiplayer.get_unique_id())
 
 
 func _on_connection_failed() -> void:
-	multiplayer.multiplayer_peer = OfflineMultiplayerPeer.new()
-	lobby.set_status("Could not connect.", false)
-	_listen_lan()
+	_back_to_lobby("Couldn't reach that game. Is it still open, and is the host's firewall letting UDP %d in?"
+		% Lobby.DEFAULT_PORT, true)
 
 
-func _listen_lan() -> void:
-	if lan.start_listening():
-		lobby.set_lan_hint("SEARCHING...")
-	else:
-		lobby.set_lan_hint("CAN'T SEARCH THE LAN: PORT %d IS BUSY (ANOTHER COPY OPEN?)" % LanDiscovery.PORT)
+func _search_lan() -> void:
+	lan.start_searching()
+	lobby.set_lan_hosts(lan.hosts())
 
 
 func _on_lan_hosts(hosts: Array) -> void:
@@ -226,7 +241,7 @@ func _on_server_disconnected() -> void:
 	_back_to_lobby("The host left.")
 
 
-func _back_to_lobby(message: String) -> void:
+func _back_to_lobby(message: String, is_error := false) -> void:
 	_log_event("back to lobby: " + message)
 	_clear_round()
 	phase = Phase.LOBBY
@@ -236,9 +251,9 @@ func _back_to_lobby(message: String) -> void:
 	hud.visible = false
 	hand.visible = false
 	lobby.visible = true
-	lobby.set_status(message, false)
+	lobby.show_menu(message, is_error)
 	lan.stop_advertising()
-	_listen_lan()
+	_search_lan()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
@@ -317,7 +332,7 @@ func start_round(seed_in: int, number: int, a_peer: int, b_peer: int) -> void:
 	_update_carry()
 
 	lan.stop_advertising()  # one partner per game
-	lan.stop_listening()
+	lan.stop_searching()
 	lobby.visible = false
 	hud.visible = true
 	hand.visible = true
