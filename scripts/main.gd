@@ -153,6 +153,10 @@ var _online_ws_url := ""
 func _ready() -> void:
 	if _relaunch_if_software_rendering():
 		return
+	if OS.get_cmdline_user_args().has("--view"):
+		# Look-only mode: the world and UI with no game running (scripts/viewer.gd).
+		get_tree().change_scene_to_file.call_deferred("res://scenes/viewer.tscn")
+		return
 	process_physics_priority = 100  # run after the players have moved
 	_setup_input()
 	fx = WorldFx.new()

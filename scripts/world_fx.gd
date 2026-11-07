@@ -31,21 +31,37 @@ func _ready() -> void:
 	env.glow_enabled = true
 	env.glow_intensity = 0.6
 	env.glow_hdr_threshold = 1.6
+	if not Palette.COMIC:
+		env.ssao_enabled = true  # soft contact shadows where there are no ink lines
+		env.ssao_intensity = 1.6
+		# Rooms are enclosed now: a bright, near-white fill so the shade isn't gloomy.
+		env.ambient_light_color = Color("e9e4f2")
+		env.ambient_light_energy = 0.32
+		env.tonemap_mode = Environment.TONE_MAPPER_FILMIC  # bright sun patches roll off instead of clipping
+		env.tonemap_exposure = 1.15
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-58, -35, 0)
-	sun.light_energy = 0.85
+	# Low and from +Z, so it comes in through the window wall (room_builder.gd)
+	# and lays long bright shafts across the floor.
+	sun.rotation_degrees = Vector3(-30, -25, 0)
+	sun.light_energy = 0.85 if Palette.COMIC else 3.6
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
 	sun.directional_shadow_max_distance = 60.0
+	if not Palette.COMIC:
+		# The halftone used to hide shadow pixels; filter them instead.
+		RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_SOFT_MEDIUM)
+		RenderingServer.directional_shadow_atlas_set_size(4096, true)
+		sun.shadow_blur = 1.5
 	add_child(sun)
 
 	_post = ShaderMaterial.new()
 	_post.shader = ComicShader
 	_post.render_priority = Material.RENDER_PRIORITY_MIN
+	_post.set_shader_parameter("comic", 1.0 if Palette.COMIC else 0.0)
 	var quad_mesh := QuadMesh.new()
 	quad_mesh.size = Vector2(2, 2)
 	var quad := MeshInstance3D.new()

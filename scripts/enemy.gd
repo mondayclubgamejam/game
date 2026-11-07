@@ -18,12 +18,24 @@ const GUN_RANGE := 18.0
 const SPAWN_GRACE := 2.2       ## no attacks right after a (re)start
 const REACTION := 0.45         ## pause after first spotting someone
 
-const SPEEDS := [2.4, 4.0, 3.45]         ## by kind: gunman, sword, fists (m/s)
+const SPEEDS := [2.4, 4.0, 3.45]         ## by kind: gunman, sword, knives (m/s)
 const WINDUPS := [0.7, 0.3, 0.4]
 const COOLDOWNS := [3.8, 0.8, 0.7]       ## gunmen reload slowly
 const COOLDOWN_JITTER := [1.4, 0.4, 0.4]
-## Resting arm angle by kind: pistol level, sword raised, fists up.
-const ARM_REST := [0.0, 0.9, 0.25]
+## Resting arm angle by kind (0 = straight ahead, -PI/2 = hanging down):
+## pistol level, sword raised, knives held low at the sides.
+const ARM_REST := [0.0, 0.45, -1.3]
+## Wind-up pull (added to the rest angle) and strike swing, by kind: the sword
+## lifts then slashes down; the knives draw back then stab forward and up.
+const WINDUP_PULL := [0.0, 0.8, -0.45]
+const STRIKE_SWING := [0.0, -1.5, 1.45]
+
+const Mannequin := preload("res://scripts/mannequin.gd")
+const Models := preload("res://scripts/models.gd")
+const PISTOL_SCALE := 1.35    ## enemy weapons are a bit oversized so they read at a distance
+const PISTOL_MUZZLE := 0.17   ## grip to muzzle on the pistol model (before scaling)
+const KNIFE_SCALE := 1.3
+const KNIFE_TILT := 0.9       ## knife turned up from the arm, so it points ahead with the arm down
 
 static var _meshes := {}
 
@@ -53,8 +65,12 @@ var _net_vel := Vector3.ZERO
 var _net_age := 0.0
 
 # Visuals.
-var _body_mi: MeshInstance3D
-var _head_mi: MeshInstance3D
+var _tint_parts: Array[MeshInstance3D] = []  ## body parts that flash white / light up yellow
+var _man: Mannequin = null     ## the human figure (null on the fallback body)
+var _arm_l: Node3D = null      ## left-arm pivot when both arms hold weapons (brawlers)
+var _swing_left_arm := true
+var _muzzle_reach := 0.4
+var _last_pos := Vector3.ZERO
 var _arm: Node3D
 var _aim_line: MeshInstance3D
 var _aim_target: Node3D = null
@@ -75,6 +91,7 @@ func _ready() -> void:
 	add_child(shape)
 	_build_visuals()
 	_net_pos = global_position
+	_last_pos = global_position
 	set_process(false)
 	_cooldown = SPAWN_GRACE + id * 0.12
 
@@ -83,18 +100,39 @@ func _ready() -> void:
 ## a held-out pistol, a raised long sword, or big fists, plus a coloured belt.
 func _build_visuals() -> void:
 	var accent: Color = Palette.KIND_COLORS[kind]
-	_body_mi = _mesh_part("body", Vector3(0, 0.8, 0), Palette.toon(_skin()), self)
-	_head_mi = _mesh_part("head", Vector3(0, 1.88, 0), Palette.toon(_skin()), self)
-	_mesh_part("visor", Vector3(0, 1.9, -0.22), Palette.toon(Palette.INK), self)
-	_mesh_part("belt", Vector3(0, 0.95, 0), Palette.toon(accent), self)
+	var body_mat := Palette.toon(_skin())
+	# _arm is the weapon arm's pivot: the wind-up and strike tweens turn it,
+	# and the mannequin's right arm bone follows it.
 	_arm = Node3D.new()
-	_arm.position = Vector3(0.42, 1.15, -0.25)
 	_arm.rotation.x = ARM_REST[kind]
 	add_child(_arm)
+	var hand := 0.0  # how far along _arm the weapon sits
+	var man := Mannequin.new()
+	if man.setup(body_mat, Palette.toon(accent)):
+		_man = man
+		add_child(man)
+		_tint_parts.append(man.body)
+		_arm.position = Mannequin.SHOULDER
+		hand = Mannequin.REACH
+	else:
+		# Fallback until the model is built: the old primitive body.
+		_arm.position = Vector3(0.42, 1.15, -0.25)
+		_tint_parts.append(_mesh_part("body", Vector3(0, 0.8, 0), body_mat, self))
+		_tint_parts.append(_mesh_part("head", Vector3(0, 1.88, 0), body_mat, self))
+		_mesh_part("visor", Vector3(0, 1.9, -0.22), Palette.toon(Palette.INK), self)
+		_mesh_part("belt", Vector3(0, 0.95, 0), Palette.toon(accent), self)
+	var mats := {"dark": Palette.toon(Palette.INK), "steel": Palette.toon(Palette.STEEL),
+		"accent": Palette.toon(accent)}
 	match kind:
 		RoomGen.Kind.GUNMAN:
-			_mesh_part("pistol", Vector3(0, 0, -0.26), Palette.toon(Palette.STEEL), _arm)
-			_mesh_part("muzzle", Vector3(0, 0.02, -0.56), Palette.toon(accent), _arm)
+			var pistol := Models.build("pistol", mats)
+			if pistol != null:
+				_attach(pistol, _arm, hand, PISTOL_SCALE)
+				_muzzle_reach = hand + PISTOL_MUZZLE * PISTOL_SCALE
+			else:
+				_mesh_part("pistol", Vector3(0, 0, -0.26 - hand), Palette.toon(Palette.STEEL), _arm)
+				_mesh_part("muzzle", Vector3(0, 0.02, -0.56 - hand), Palette.toon(accent), _arm)
+				_muzzle_reach = 0.4 + hand
 			_aim_line = MeshInstance3D.new()
 			_aim_line.mesh = _get_mesh("unit")
 			_aim_line.material_override = Palette.glow(Palette.DANGER, 3.0)
@@ -103,12 +141,54 @@ func _build_visuals() -> void:
 			_aim_line.visible = false
 			add_child(_aim_line)
 		RoomGen.Kind.KNIFE:
-			_mesh_part("grip", Vector3(0, 0, 0), Palette.toon(Palette.INK), _arm)
-			_mesh_part("guard", Vector3(0, 0, -0.13), Palette.toon(Palette.STEEL), _arm)
-			_mesh_part("blade", Vector3(0, 0, -0.72), Palette.toon(accent), _arm)
+			var sword := Models.build("sword", mats)
+			if sword != null:
+				_attach(sword, _arm, hand, 1.0)
+			else:
+				_mesh_part("grip", Vector3(0, 0, -hand), Palette.toon(Palette.INK), _arm)
+				_mesh_part("guard", Vector3(0, 0, -0.13 - hand), Palette.toon(Palette.STEEL), _arm)
+				_mesh_part("blade", Vector3(0, 0, -0.72 - hand), Palette.toon(accent), _arm)
 		RoomGen.Kind.FISTS:
-			_mesh_part("fist", Vector3(0, 0, -0.18), Palette.toon(accent), _arm)
-			_mesh_part("fist", Vector3(-0.84, 0, -0.18), Palette.toon(accent), _arm)
+			# Knife fighters: a knife in each hand, arms down; the left arm copies _arm.
+			mats["blade"] = Palette.toon(Palette.KNIFE_BLADE)
+			var pivots: Array[Node3D] = [_arm]
+			if _man != null:
+				_arm_l = Node3D.new()
+				_arm_l.position = Vector3(-Mannequin.SHOULDER.x, Mannequin.SHOULDER.y, Mannequin.SHOULDER.z)
+				_arm_l.rotation.x = ARM_REST[kind]
+				add_child(_arm_l)
+				pivots.append(_arm_l)
+				_swing_left_arm = false
+			for pivot in pivots:
+				var knife := Models.build("knife", mats)
+				if knife != null:
+					_attach(knife, pivot, hand, KNIFE_SCALE)
+					knife.rotation.x = KNIFE_TILT
+				else:
+					_mesh_part("blade", Vector3(0, 0, -0.2 - hand), Palette.toon(accent), pivot).scale = Vector3(1, 1, 0.3)
+	animate_walk(0.0, 0.0)
+
+
+## Poses the figure: the weapon arm follows _arm, and walking swings the
+## legs and the free arm, scaled by how fast the enemy moves (m/s).
+func animate_walk(speed: float, delta: float) -> void:
+	if _man == null:
+		return
+	_man.walk(speed, delta)
+	# Arms hang down at rest, so pointing along _arm is a quarter turn up.
+	_man.bend("upperarm_r", PI * 0.5 + _arm.rotation.x)
+	if _arm_l != null:
+		_arm_l.rotation.x = _arm.rotation.x
+		_man.bend("upperarm_l", PI * 0.5 + _arm.rotation.x)
+	elif _swing_left_arm:
+		_man.bend("upperarm_l", -_man.swing * 0.7)
+
+
+## Puts a weapon model in the hand at the end of an arm pivot.
+func _attach(model: Node3D, pivot: Node3D, reach: float, scale_by: float) -> void:
+	model.position = Vector3(0, 0, -reach)
+	model.scale = Vector3.ONE * scale_by
+	pivot.add_child(model)
 
 
 func _mesh_part(key: String, pos: Vector3, mat: Material, parent: Node3D) -> MeshInstance3D:
@@ -189,8 +269,8 @@ static func _get_mesh(key: String) -> Mesh:
 func set_targeted(on: bool) -> void:
 	if alive:
 		var mat := Palette.toon(Palette.TARGET if on else _skin())
-		_body_mi.material_override = mat
-		_head_mi.material_override = mat
+		for mi in _tint_parts:
+			mi.material_override = mat
 
 
 ## Dummies look like wooden practice targets.
@@ -223,7 +303,7 @@ func alert() -> void:
 
 
 func muzzle_pos() -> Vector3:
-	return _arm.global_position + -global_basis.z * 0.4
+	return _arm.global_position + -global_basis.z * _muzzle_reach
 
 
 # --- Network smoothing (clients) ----------------------------------------------
@@ -242,8 +322,8 @@ func _process(delta: float) -> void:
 	if _flash > 0.0:
 		_flash = maxf(_flash - delta * Clock.scale, 0.0)
 		if kind != RoomGen.Kind.GUNMAN:
-			# Wind up: pull the weapon back and up.
-			_arm.rotation.x = ARM_REST[kind] + 0.8 * minf(_flash * 4.0, 1.0)
+			# Wind up: pull the weapon back.
+			_arm.rotation.x = ARM_REST[kind] + WINDUP_PULL[kind] * minf(_flash * 4.0, 1.0)
 	if _aim_line != null and _aim_line.visible:
 		if _aim_target == null or not is_instance_valid(_aim_target) or _flash <= 0.0:
 			_aim_line.visible = false
@@ -257,8 +337,8 @@ func _process(delta: float) -> void:
 func show_windup(target: Node3D, seconds: float) -> void:
 	_flash = seconds
 	var mat := Palette.toon(Color.WHITE)
-	_body_mi.material_override = mat
-	_head_mi.material_override = mat
+	for mi in _tint_parts:
+		mi.material_override = mat
 	if _aim_line != null and target != null:
 		_aim_target = target
 		_aim_line.visible = true
@@ -271,7 +351,7 @@ func show_strike() -> void:
 	if kind != RoomGen.Kind.GUNMAN:
 		# Swing through, then settle back.
 		var tw := create_tween()
-		tw.tween_property(_arm, "rotation:x", rest - 1.5, 0.08)
+		tw.tween_property(_arm, "rotation:x", rest + STRIKE_SWING[kind], 0.08)
 		tw.tween_property(_arm, "rotation:x", rest, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	else:
 		_arm.rotation.x = rest
@@ -295,6 +375,9 @@ func _draw_line(a: Vector3, b: Vector3) -> void:
 func _physics_process(delta: float) -> void:
 	if not alive:
 		return
+	var moved := global_position - _last_pos
+	_last_pos = global_position
+	animate_walk(Vector2(moved.x, moved.z).length() / maxf(delta, 0.001), delta)
 	if not multiplayer.is_server():
 		_net_age += delta
 		var predicted := _net_pos + _net_vel * minf(_net_age, 0.15)

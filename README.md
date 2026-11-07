@@ -39,6 +39,10 @@ Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs
 
 It builds the game the first time (about 30 seconds; it fetches Godot by itself), and after that only when the code has changed, for example after a `git pull`. Then it starts the game.
 
+**To just look at the world and UI** with no game running: `tools/view.sh`. It shows a generated room with frozen enemies and every UI screen filled with sample data, and gives you a free-fly camera. The keys are listed on screen and at the top of `scripts/viewer.gd`.
+
+**To rebuild the 3D models** (only needed when changing them): install [Blender](https://www.blender.org/download/) and run `tools/blender/build.sh`. Each model is a Python script in `tools/blender/` that exports a `.glb` into `assets/models/`; the exported files are committed.
+
 **To run the online server**, on the server: `tools/server.sh`. See [`server/README.md`](server/README.md).
 
 **To work on the game** in the editor: install Godot 4.7, choose **Import** and select `project.godot`, then press **F5**.
@@ -62,7 +66,7 @@ The aim line shows where the shot or recall will go: orange for a shot, blue for
 ### How it plays
 
 - **Optional: time slows down while everyone stands still** (the host turns it on in the match lobby). Everything slows: players, enemies, bullets, enemy shots and thrown guns. A **TIME SLOWS** cut-in, a **TIME SLOWED** banner and a cool grey screen make it obvious. Pressing any movement key speeds time back up over a quarter of a second. Use it to plan a shot, line up a recall, or watch an enemy bullet coming.
-- **Enemies come in three kinds**, told apart by silhouette and colour (weapon and belt): **gunmen** (red, pistol; shoot from range, then take a while to reload), **swordsmen** (steel, long sword) and **brawlers** (lime, big fists). An enemy flashes white while it winds up an attack.
+- **Enemies come in three kinds**, told apart by silhouette and colour (weapon and belt): **gunmen** (red, pistol; shoot from range, then take a while to reload), **swordsmen** (blue steel, long sword) and **knife fighters** (lime, a knife in each hand, arms down until they lunge). An enemy flashes white while it winds up an attack.
 - **Crates** are waist-high cover: crouch behind them, jump on them, and note that bullets stick in them like walls.
 - The **ATTEMPT** counter under TARGETS counts your tries at the current room; it resets when you clear it. In Endless it shows the room and your best instead.
 
