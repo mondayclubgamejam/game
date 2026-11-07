@@ -51,6 +51,21 @@ const PING_INTERVAL := 0.5
 const RESTART_DELAY := 1.6
 const NEXT_ROOM_DELAY := 2.4
 const RUN_OVER_DELAY := 3.0
+## Tutorial B: [title, what NORMAL does, what INVERTED does] for each step.
+const TUT_STEPS := [
+	["GRAB THE GUN", "WALK OVER THE GUN TO PICK IT UP", "LET YOUR NORMAL PARTNER PICK UP THE GUN"],
+	["ONE BULLET, MANY TARGETS", "SHOOT ALL THREE TARGETS: THE BULLET GOES STRAIGHT THROUGH THEM",
+		"WATCH: ONLY NORMAL CAN FIRE"],
+	["PASS THE GUN", "RIGHT CLICK TO THROW THE EMPTY GUN TO YOUR PARTNER", "CATCH THE GUN: STAND IN ITS WAY"],
+	["BRING IT HOME", "ONLY INVERTED CAN RECALL: KEEP OUT OF THE BLUE LINE",
+		"RECALL THROUGH THE NEW TARGET: MOVE TO BEND THE BLUE LINE"],
+	["WATCH YOUR PARTNER", "THE BULLET KILLS TEAMMATES TOO. A RED LINE MEANS SOMEONE'S IN THE WAY. DO ONE MORE LOOP",
+		"THE BULLET KILLS TEAMMATES TOO. A RED LINE MEANS SOMEONE'S IN THE WAY. DO ONE MORE LOOP"],
+	["FOR REAL", "CLEAR THE ROOM. STAND STILL TO SLOW TIME; CROUCH (CTRL) BEHIND CRATES",
+		"CLEAR THE ROOM. STAND STILL TO SLOW TIME; CROUCH (CTRL) BEHIND CRATES"],
+]
+## Tutorial B: the step that wakes each enemy group.
+const TUT_WAKE := {1: 1, 2: 3, 3: 5}
 const MASK_WORLD := 1
 const MASK_ENEMY := 2
 const MASK_PLAYER := 4
@@ -58,7 +73,7 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Network protocol version. Bump it whenever an RPC's arguments change, so
 ## mismatched builds refuse each other with a clear message instead of
 ## failing on individual RPCs.
-const PROTOCOL := 12
+const PROTOCOL := 13
 const MAX_PLAYERS := 4
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
@@ -113,6 +128,9 @@ var _auto_join_lan := false
 var _slowmo_enabled := false   ## host: chosen in the match lobby (off by default)
 var _map_id := Lobby.DEFAULT_MAP  ## host: chosen in the match lobby
 var _round_mode := Lobby.DEFAULT_MAP  ## the map / mode of the round being played
+var _tut_step := 0             ## tutorial B: the current step (0-5)
+var _tut_mark := 0             ## tutorial B: recalls done when the step began
+var _recalls_done := 0         ## bullets recalled into the gun this round
 var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
 var _party := {}               ## host: match lobby members, peer id -> {name, role, ready}
 var _party_order: Array[int] = []
@@ -883,6 +901,9 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 	attempt = try_no
 	_round_end = ""
 	_round_mode = mode
+	_tut_step = clampi(number - 1, 0, TUT_STEPS.size() - 1) if mode == "tutorial_b" else 0
+	_tut_mark = 0
+	_recalls_done = 0
 	roster = team
 	if Maps.is_fixed(mode):
 		room = Maps.build(mode, team.size())
@@ -914,18 +935,31 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 		e.id = i
 		e.kind = room.enemy_kinds[i]
 		e.pace = room.pace
+		e.dummy = room.enemy_dummy[i] == 1
 		e.game = self
 		e.astar = astar
 		e.position = RoomGen.cell_center(room.enemy_cells[i])
 		round_root.add_child(e)
 		enemies.append(e)
 	_enemies_left = enemies.size()
+	# Tutorial B: groups from earlier steps are already beaten, later ones wait.
+	for i in enemies.size():
+		var group: int = room.enemy_groups[i]
+		if group > 0:
+			if TUT_WAKE[group] < _tut_step:
+				enemies[i].die()
+				_enemies_left -= 1
+			elif TUT_WAKE[group] > _tut_step:
+				enemies[i].set_active(false)
 	_enemy_buf.resize(enemies.size() * 3 + 1)
 
 	gun = Gun.new()
 	round_root.add_child(gun)
-	gun.hold(players[first_normal])
 	gun.set_loaded(true)
+	if room.gun_cell.x >= 0 and _tut_step == 0:
+		gun.drop_at(RoomGen.cell_center(room.gun_cell))  # the tutorial gun lies on the floor
+	else:
+		gun.hold(players[first_normal])
 	bullet = Bullet.new()
 	round_root.add_child(bullet)
 	bullet.enemy_hit.connect(_on_bullet_enemy_hit)
@@ -1017,7 +1051,7 @@ func _later(seconds: float, fn: Callable) -> void:
 func room_cleared() -> void:
 	phase = Phase.OVER
 	_round_end = "cleared"
-	hud.banner("CLEAR!", Palette.ENEMY)
+	hud.banner("TRAINING COMPLETE" if Maps.is_tutorial(_round_mode) else "CLEAR!", Palette.ENEMY)
 	_log_event("room cleared")
 	if Maps.is_fixed(_round_mode):
 		# A hand-made map is done once it's cleared: back to the match lobby.
@@ -1048,6 +1082,15 @@ func player_down(peer: int, cause: String) -> void:
 	if gun != null and gun.state == Gun.HELD and gun.holder == p:
 		gun.drop_at(p.global_position)
 		_update_carry()
+	if Maps.is_tutorial(_round_mode):
+		# Tutorials don't leave anyone spectating: try the step again.
+		phase = Phase.OVER
+		_round_end = "died"
+		hud.banner("TRY AGAIN", Palette.DANGER)
+		if multiplayer.is_server():
+			var step := _tut_step
+			_later(RESTART_DELAY, func(): start_round.rpc(room_seed, step + 1, attempt + 1, roster, _round_mode))
+		return
 	if me:
 		_later(1.2, _spectate_next)
 	if multiplayer.is_server():
@@ -1344,6 +1387,7 @@ func bullet_arrived(seq: int, kills: int) -> void:
 		return
 	bullet.reset()
 	gun.set_loaded(true)
+	_recalls_done += 1
 	if gun.holder == local_player:
 		hand.play_recall_catch()
 	_kill_banner(kills, true)
@@ -1594,6 +1638,7 @@ func _physics_process(delta: float) -> void:
 
 	_update_clock(delta)
 	if multiplayer.is_server():
+		_tutorial_tick()
 		_sync_t -= delta
 		if _sync_t <= 0.0:
 			_sync_t = ENEMY_SYNC_INTERVAL
@@ -1628,7 +1673,7 @@ func _update_clock(delta: float) -> void:
 	# Only the host knows whether slow motion is on; everyone else follows the
 	# decision it sends (always 1.0 when it's off).
 	if phase == Phase.PLAYING:
-		if multiplayer.is_server() and not _slowmo_enabled:
+		if multiplayer.is_server() and not _slowmo_on():
 			target = 1.0
 		elif multiplayer.is_server():
 			var anyone_moving := false
@@ -1652,9 +1697,15 @@ func _update_clock(delta: float) -> void:
 	fx.set_slowmo(inverse_lerp(1.0, Clock.SLOW, Clock.scale))
 
 
+## Slow motion is a lobby option; the tutorial's last step always has it.
+func _slowmo_on() -> bool:
+	return _slowmo_enabled or (_round_mode == "tutorial_b" and _tut_step >= 5)
+
+
 func _process(_delta: float) -> void:
 	if phase == Phase.LOBBY or local_player == null:
 		return
+	_update_tutorial_hud()
 	hud.targets = _enemies_left
 	hud.can_act = can_fire() or can_recall()
 	hud.ping_ms = int(rtt * 1000.0) if rtt > 0.0 else -1
@@ -1662,6 +1713,94 @@ func _process(_delta: float) -> void:
 		_spectate_next()  # the teammate we watched went down too
 	_update_markers()
 	hud.slowmo = inverse_lerp(1.0, Clock.SLOW, Clock.scale)
+
+
+# --- Tutorials ----------------------------------------------------------------------------
+
+func is_tutorial() -> bool:
+	return Maps.is_tutorial(_round_mode)
+
+
+## Host, tutorial B: move on once the current step's goal is met.
+func _tutorial_tick() -> void:
+	if _round_mode != "tutorial_b" or phase != Phase.PLAYING or gun == null:
+		return
+	var done := false
+	match _tut_step:
+		0:
+			done = gun.state == Gun.HELD and gun.holder.role == ROLE_FORWARD
+		1:
+			done = _group_beaten(1)
+		2:
+			done = gun.state == Gun.HELD and gun.holder.role == ROLE_REVERSE
+		3:
+			done = _group_beaten(2)
+		4:
+			done = _recalls_done > _tut_mark
+	if done:
+		tutorial_step.rpc(_tut_step + 1)
+
+
+func _group_beaten(group: int) -> bool:
+	for i in enemies.size():
+		if room.enemy_groups[i] == group and enemies[i].alive:
+			return false
+	return true
+
+
+## Host -> everyone: the tutorial moves to `step`, waking that step's enemies.
+@rpc("authority", "call_local", "reliable")
+func tutorial_step(step: int) -> void:
+	if _round_mode != "tutorial_b" or phase != Phase.PLAYING or step >= TUT_STEPS.size():
+		return
+	_tut_step = step
+	room_no = step + 1
+	_tut_mark = _recalls_done
+	for i in enemies.size():
+		var group: int = room.enemy_groups[i]
+		if group > 0 and TUT_WAKE[group] == step:
+			enemies[i].set_active(true)
+	hud.banner("STEP %d  ·  %s" % [step + 1, TUT_STEPS[step][0]], Palette.SIGNAL)
+	_log_event("tutorial step %d" % step)
+
+
+func _update_tutorial_hud() -> void:
+	if not is_tutorial():
+		hud.tut_title = ""
+		hud.top_label = ""
+		return
+	var normal := local_player.role == ROLE_FORWARD
+	if _round_mode == "tutorial_b":
+		var st: Array = TUT_STEPS[_tut_step]
+		hud.top_label = "STEP  %d / %d" % [_tut_step + 1, TUT_STEPS.size()]
+		hud.tut_title = st[0]
+		hud.tut_text = st[1] if normal else st[2]
+	else:
+		hud.top_label = "LOOPS  %d" % _recalls_done
+		hud.tut_title = "FREE PRACTICE"
+		hud.tut_text = ("YOU FIRE. THEN PASS THE EMPTY GUN TO INVERTED" if normal
+			else "YOU RECALL. THEN PASS THE LOADED GUN BACK TO NORMAL") + "   ·   ESC TO LEAVE"
+	hud.tut_hint = _tutorial_hint()
+
+
+## What to do right now, from the gun's and bullet's state.
+func _tutorial_hint() -> String:
+	var me := local_player
+	if not me.alive or gun == null or phase != Phase.PLAYING:
+		return ""
+	if gun.state == Gun.GROUND:
+		return "THE GUN IS ON THE FLOOR: WALK OVER IT TO PICK IT UP"
+	if gun.state == Gun.FLYING:
+		return "" if gun.thrower == me else "THE GUN IS COMING: STAND IN ITS WAY TO CATCH IT"
+	if gun.holder != me:
+		return "%s HAS THE GUN" % gun.holder.player_name
+	if can_fire():
+		return "LEFT CLICK TO FIRE"
+	if can_recall():
+		return "LEFT CLICK TO RECALL: THE BULLET FOLLOWS THE BLUE LINE"
+	if bullet.state == bullet.FORWARD or bullet.state == bullet.RECALL:
+		return ""
+	return "RIGHT CLICK TO THROW THE GUN TO YOUR PARTNER"
 
 
 # --- Aim preview --------------------------------------------------------------------------

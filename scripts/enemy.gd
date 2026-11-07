@@ -30,6 +30,7 @@ static var _meshes := {}
 var id := 0
 var kind := 0
 var pace := 1.0                ## Endless: deeper rooms move and attack faster
+var dummy := false             ## tutorial practice dummy: stands still, never attacks
 var game: Node                 ## the main game node (host uses it to announce attacks)
 var astar: AStarGrid2D
 var alive := true
@@ -82,8 +83,8 @@ func _ready() -> void:
 ## a held-out pistol, a raised long sword, or big fists, plus a coloured belt.
 func _build_visuals() -> void:
 	var accent: Color = Palette.KIND_COLORS[kind]
-	_body_mi = _mesh_part("body", Vector3(0, 0.8, 0), Palette.toon(Palette.ENEMY), self)
-	_head_mi = _mesh_part("head", Vector3(0, 1.88, 0), Palette.toon(Palette.ENEMY), self)
+	_body_mi = _mesh_part("body", Vector3(0, 0.8, 0), Palette.toon(_skin()), self)
+	_head_mi = _mesh_part("head", Vector3(0, 1.88, 0), Palette.toon(_skin()), self)
 	_mesh_part("visor", Vector3(0, 1.9, -0.22), Palette.toon(Palette.INK), self)
 	_mesh_part("belt", Vector3(0, 0.95, 0), Palette.toon(accent), self)
 	_arm = Node3D.new()
@@ -187,9 +188,24 @@ static func _get_mesh(key: String) -> Mesh:
 
 func set_targeted(on: bool) -> void:
 	if alive:
-		var mat := Palette.toon(Palette.TARGET if on else Palette.ENEMY)
+		var mat := Palette.toon(Palette.TARGET if on else _skin())
 		_body_mi.material_override = mat
 		_head_mi.material_override = mat
+
+
+## Dummies look like wooden practice targets.
+func _skin() -> Color:
+	return Palette.CRATE_EDGE if dummy else Palette.ENEMY
+
+
+## Tutorial: an enemy waits hidden (not hittable, not thinking) until its step.
+func set_active(on: bool) -> void:
+	alive = on
+	visible = on
+	collision_layer = LAYER_ENEMY if on else 0
+	set_physics_process(on)
+	if on:
+		_cooldown = maxf(_cooldown, SPAWN_GRACE)
 
 
 func die() -> void:
@@ -290,6 +306,8 @@ func _physics_process(delta: float) -> void:
 
 
 func _brain(real_delta: float) -> void:
+	if dummy:
+		return
 	var delta := real_delta * Clock.scale  # slow motion slows the brain too
 	_cooldown = maxf(_cooldown - delta, 0.0)
 	_think -= delta

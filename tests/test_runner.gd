@@ -17,6 +17,7 @@ func _initialize() -> void:
 	test_rooms_scale_with_players()
 	test_endless_ramps_up_with_caps()
 	test_hand_made_maps()
+	test_tutorial_maps()
 	test_rooms_are_connected_and_populated()
 	test_different_seeds_differ()
 	test_merged_boxes_cover_exactly_the_walls()
@@ -278,6 +279,31 @@ func test_hand_made_maps() -> void:
 				print("  map %-10s %dp: %2d enemies (%2d gunmen), pace %.2f, %dx%d" % [id, n, r.enemy_cells.size(), gunmen, r.pace, r.cols, r.rows])
 			prev_count[n] = r.enemy_cells.size()
 			prev_gunmen[n] = gunmen
+
+
+## Both tutorial rooms: connected, gun on the floor, and B's step groups.
+func test_tutorial_maps() -> void:
+	for id in Maps.TUTORIALS:
+		for n in [2, 3, 4]:
+			var r = Maps.build(id, n)
+			check(r.reachable_count(r.spawns[0]) == r.floor_count(), "%s %dp connected" % [id, n])
+			check(r.gun_cell.x >= 0 and not r.is_solid(r.gun_cell), "%s: gun lies on the floor" % id)
+			check(r.enemy_groups.size() == r.enemy_cells.size() and r.enemy_dummy.size() == r.enemy_cells.size(),
+				"%s: every enemy has a group" % id)
+	check(Maps.build("tutorial_a", 2).enemy_cells.is_empty(), "tutorial A has no enemies")
+	var b = Maps.build("tutorial_b", 2)
+	var groups := {}
+	for i in b.enemy_cells.size():
+		groups[b.enemy_groups[i]] = groups.get(b.enemy_groups[i], 0) + 1
+		check((b.enemy_dummy[i] == 1) == (b.enemy_groups[i] < 3), "tutorial B: only the last group fights back")
+	check(groups.get(1, 0) == 3 and groups.get(2, 0) == 1 and groups.get(3, 0) >= 3, "tutorial B groups: %s" % groups)
+	check(not groups.has(0), "tutorial B: nothing is awake at the start")
+	# The three first targets line up straight below the gun, the recall target past them.
+	for i in b.enemy_cells.size():
+		if b.enemy_groups[i] <= 2:
+			check(b.enemy_cells[i].x == b.gun_cell.x and b.enemy_cells[i].y > b.gun_cell.y, "tutorial B: targets in line with the gun")
+	var plain = RoomGen.generate(7, 2)
+	check(plain.enemy_groups.size() == plain.enemy_cells.size() and plain.gun_cell.x < 0, "random rooms: groups filled, gun in hand")
 
 
 ## True if a straight line between two cells crosses no full wall (crates are

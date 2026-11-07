@@ -19,7 +19,7 @@ func _initialize() -> void:
 	await create_timer(1.0).timeout
 	var main = current_scene
 	var team := [[1, 0, "A"], [2, 1, "B"]]
-	var jobs := [["random", 20240, 1, "random"], ["endless", 31337, 7, "endless"]]
+	var jobs := [["random", 20240, 1, "random"], ["endless", 31337, 7, "endless"], ["tutorial", 1, 2, "tutorial_b"]]
 	for id in Maps.ORDER:
 		jobs.append([id, 1, 1, id])
 	for job in jobs:

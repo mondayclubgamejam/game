@@ -15,6 +15,10 @@ var targets := 0
 var attempt := 1
 var room_no := 1
 var best := -1                   ## Endless: best room reached (-1 outside Endless)
+var top_label := ""              ## replaces "TARGETS n" (tutorials)
+var tut_title := ""              ## tutorial panel: step title ("" = no panel)
+var tut_text := ""               ## tutorial panel: what to do in this step
+var tut_hint := ""               ## tutorial panel: what to do right now
 var ping_ms := -1
 var markers: Array = []          ## [Vector2 pos, Color, String label, bool on_screen]
 var spectating := ""             ## while dead: the teammate being watched
@@ -91,12 +95,13 @@ func _draw() -> void:
 
 	# Targets, top left.
 	_panel(Vector2(24, 24) * s, Vector2(250, 54) * s, Palette.ENEMY)
-	_text("TARGETS  %d" % targets, Vector2(48, 66) * s, int(34 * s), Color.WHITE, int(8 * s))
+	_text(top_label if top_label != "" else "TARGETS  %d" % targets, Vector2(48, 66) * s, int(34 * s), Color.WHITE, int(8 * s))
 	# Attempt counter (Endless: room and best), tucked under the targets panel.
-	var sub := "ATTEMPT  %d" % attempt if best < 0 else "ROOM %d  ·  BEST %d" % [room_no, best]
-	var sub_w := font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, int(20 * s)).x / s
-	_panel(Vector2(36, 84) * s, Vector2(maxf(170.0, sub_w + 56.0), 34) * s, Palette.INK.lightened(0.18))
-	_text(sub, Vector2(58, 109) * s, int(20 * s), Palette.SIGNAL, 0)
+	if tut_title == "":
+		var sub := "ATTEMPT  %d" % attempt if best < 0 else "ROOM %d  ·  BEST %d" % [room_no, best]
+		var sub_w := font.get_string_size(sub, HORIZONTAL_ALIGNMENT_LEFT, -1, int(20 * s)).x / s
+		_panel(Vector2(36, 84) * s, Vector2(maxf(170.0, sub_w + 56.0), 34) * s, Palette.INK.lightened(0.18))
+		_text(sub, Vector2(58, 109) * s, int(20 * s), Palette.SIGNAL, 0)
 
 	# Role tag, top right, sized to the word.
 	var role_name := "NORMAL" if role == 0 else "INVERTED"
@@ -107,6 +112,8 @@ func _draw() -> void:
 
 	if spectating != "":
 		_draw_spectating(w, h, s)
+	elif tut_title != "":
+		_draw_tutorial(w, h, s, role_col)
 
 	var hint := HINT if ping_ms < 0 else "%s     PING %d MS" % [HINT, ping_ms]
 	draw_string(font, Vector2(0, h - 10 * s), hint, HORIZONTAL_ALIGNMENT_RIGHT, w - 16 * s,
@@ -126,6 +133,21 @@ func _draw_spectating(w: float, h: float, s: float) -> void:
 	_panel(pos, size * s, Palette.DANGER)
 	_text(text, pos + Vector2(42, 40) * s, fs, Color.WHITE, int(7 * s))
 	_text("CLICK FOR THE NEXT TEAMMATE", pos + Vector2(46, 62) * s, int(15 * s), Palette.INK, 0)
+
+
+## Tutorials: the step, what to do in it, and what to do right now.
+func _draw_tutorial(w: float, h: float, s: float, role_col: Color) -> void:
+	var sizes := [26, 18, 18]
+	var lines := [tut_title, tut_text, tut_hint]
+	var widest := 0.0
+	for i in 3:
+		widest = maxf(widest, font.get_string_size(lines[i], HORIZONTAL_ALIGNMENT_LEFT, -1, int(sizes[i] * s)).x / s)
+	var size := Vector2(widest + 100, 112)
+	var pos := Vector2(w * 0.5 - size.x * 0.5 * s, h - 150 * s)
+	_panel(pos, size * s, Palette.INK.lightened(0.1))
+	_text(tut_title, pos + Vector2(46, 38) * s, int(26 * s), Palette.SIGNAL, int(6 * s))
+	_text(tut_text, pos + Vector2(40, 66) * s, int(18 * s), Color.WHITE, 0)
+	_text(tut_hint, pos + Vector2(34, 94) * s, int(18 * s), role_col, int(5 * s))
 
 
 const SLOW_COLOR := Color("8fd3ff")

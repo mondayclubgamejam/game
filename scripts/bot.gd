@@ -76,6 +76,18 @@ func _physics_process(delta: float) -> void:
 				if _cool <= 0.0:
 					game.try_primary()
 					_cool = 0.5
+			elif game.is_tutorial() and _nothing_to_shoot():
+				# Tutorial with no targets up: fire at a wall, away from teammates.
+				var away := Vector3.ZERO
+				for m in mates:
+					away += me.global_position - m.global_position
+				away.y = 0.0
+				if away.length() < 0.1:
+					away = Vector3.BACK
+				_look_at(me, me.eye_pos() + away.normalized() * 10.0)
+				if _cool <= 0.0:
+					game.try_primary()
+					_cool = 0.6
 			else:
 				me.bot_move = Vector2(1, 0)  # a teammate is in the way of every shot: sidestep
 		elif game.can_recall():
@@ -102,6 +114,13 @@ func _physics_process(delta: float) -> void:
 	elif gun.state == gun.HELD and gun.holder != null:
 		_look_at(me, gun.holder.chest_pos())
 		me.bot_crouch = true  # crouch while a teammate has the gun
+
+
+func _nothing_to_shoot() -> bool:
+	for e in game.enemies:
+		if e.alive:
+			return false
+	return true
 
 
 ## True if the recall curve would pass through a living teammate.

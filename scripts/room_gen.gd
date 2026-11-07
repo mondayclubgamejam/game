@@ -40,6 +40,9 @@ var solid := PackedByteArray()  ## cols * rows: 0 floor, WALL or CRATE
 var spawns: Array[Vector2i] = []  ## one per player, side by side on the spawn row
 var enemy_cells: Array[Vector2i] = []
 var enemy_kinds: PackedByteArray = PackedByteArray()
+var enemy_groups: PackedByteArray = PackedByteArray()  ## tutorial: which step wakes each one (0 = from the start)
+var enemy_dummy: PackedByteArray = PackedByteArray()   ## 1 = practice dummy: never moves or attacks
+var gun_cell := Vector2i(-1, -1)  ## hand-made maps: where the gun starts on the floor (-1 = in a hand)
 var boxes: Array[Rect2i] = []   ## merged wall rectangles, in cells
 var crates: Array[Vector2i] = []
 
@@ -55,10 +58,11 @@ static func generate(seed_in: int, player_count := 2, endless_level := -1) -> Re
 
 
 ## A hand-made room from text rows (see scripts/maps.gd for the symbols).
-static func from_layout(lines: Array, player_count := 2, pace_in := 1.0) -> RefCounted:
+## `enemy_group` puts the map's g/k/f enemies in that group (tutorial steps).
+static func from_layout(lines: Array, player_count := 2, pace_in := 1.0, enemy_group := 0) -> RefCounted:
 	var room = new()
 	room.pace = pace_in
-	room._load(lines, clampi(player_count, 2, MAX_PLAYERS))
+	room._load(lines, clampi(player_count, 2, MAX_PLAYERS), enemy_group)
 	return room
 
 
@@ -158,7 +162,7 @@ func _build(seed_in: int, player_count: int) -> void:
 	_merge_boxes()
 
 
-func _load(lines: Array, player_count: int) -> void:
+func _load(lines: Array, player_count: int, enemy_group := 0) -> void:
 	players = player_count
 	rows = lines.size()
 	cols = str(lines[0]).length()
@@ -178,9 +182,19 @@ func _load(lines: Array, player_count: int) -> void:
 				crates.append(c)
 			elif ch in ["1", "2", "3", "4"]:
 				spawn_at[ch.to_int()] = c
+			elif ch == "*":
+				gun_cell = c
+			elif ch == "x" or ch == "y":
+				# Practice dummies: x wake at tutorial group 1, y at group 2.
+				enemy_cells.append(c)
+				enemy_kinds.append(Kind.FISTS)
+				enemy_groups.append(1 if ch == "x" else 2)
+				enemy_dummy.append(1)
 			elif kinds.has(ch.to_lower()) and (ch == ch.to_lower() or players >= 3):
 				enemy_cells.append(c)
 				enemy_kinds.append(kinds[ch.to_lower()])
+				enemy_groups.append(enemy_group)
+				enemy_dummy.append(0)
 	for i in players:
 		spawns.append(spawn_at.get(i + 1, Vector2i(1 + i, 1)))
 	_merge_boxes()
@@ -297,6 +311,8 @@ func _place_enemies(rng: RandomNumberGenerator) -> void:
 		if crowded:
 			continue
 		enemy_cells.append(c)
+		enemy_groups.append(0)
+		enemy_dummy.append(0)
 		var roll := rng.randf()
 		var kind := Kind.GUNMAN if roll < share else (Kind.KNIFE if roll < share + 0.3 else Kind.FISTS)
 		enemy_kinds.append(kind)

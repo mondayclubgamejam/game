@@ -30,7 +30,8 @@ const MAX_PLAYERS := 4
 ## The map grid in the match lobby, 3 x 3, read left to right, top to bottom.
 ## Only maps marked ready can be picked; the rest are still being made.
 const MAPS := [
-	{"id": "tutorial", "name": "TUTORIAL", "sub": "LEARN THE LOOP", "ready": false},
+	# Preview build: the tile switches between tutorial A and B when clicked again.
+	{"id": "tutorial", "name": "TUTORIAL", "sub": "LEARN THE LOOP", "ready": true},
 	{"id": "random", "name": "RANDOM", "sub": "A NEW ROOM EVERY TIME", "ready": true},
 	{"id": "endless", "name": "ENDLESS", "sub": "HOW FAR CAN YOU GET?", "ready": true},
 	# Hand-made maps (scripts/maps.gd), easiest first.
@@ -57,6 +58,10 @@ const GRID_MARGIN := 24.0    ## between the grid and the panel
 
 
 static func map_available(id: String) -> bool:
+	if id == "tutorial_a" or id == "tutorial_b":
+		return true
+	if id == "tutorial":
+		return false  # the tile picks A or B
 	for m in MAPS:
 		if m["id"] == id:
 			return m["ready"]
@@ -120,6 +125,7 @@ var _leader := 0
 var _title_node: Control
 var _maps_node: Control
 var _map_tiles: Array[Button] = []
+var _selected_map := ""
 var _map_subs: Array[Label] = []
 var _map_pics: Array[ShaderMaterial] = []   ## null where a map has no picture
 var _host_label: Label
@@ -414,7 +420,11 @@ func _build_maps() -> void:
 		_map_subs.append(sub)
 		b.add_child(box)
 		var id: String = m["id"]
-		b.pressed.connect(func(): map_chosen.emit(id))
+		b.pressed.connect(func():
+			if id == "tutorial":
+				map_chosen.emit("tutorial_b" if _selected_map == "tutorial_a" else "tutorial_a")
+			else:
+				map_chosen.emit(id))
 		_maps_node.add_child(b)
 		_map_tiles.append(b)
 
@@ -422,11 +432,15 @@ func _build_maps() -> void:
 ## Highlights the chosen map; only the host can click ready maps. Endless
 ## shows this computer's best room for the current number of players.
 func _show_maps(selected: String, is_host: bool, players: int) -> void:
+	_selected_map = selected
 	for i in MAPS.size():
 		var m: Dictionary = MAPS[i]
 		var b := _map_tiles[i]
 		var sub := _map_subs[i]
 		var picked: bool = m["id"] == selected and m["id"] != ""
+		var is_tut: bool = m["id"] == "tutorial"
+		if is_tut:
+			picked = selected.begins_with("tutorial_")
 		var fill: Color
 		sub.text = m["sub"]
 		if m["id"] == "endless":
@@ -452,7 +466,14 @@ func _show_maps(selected: String, is_host: bool, players: int) -> void:
 			b.add_theme_stylebox_override(state, style)
 		b.add_theme_stylebox_override("hover", _slanted(fill.lightened(0.15), 6 if picked else 4,
 			Color.WHITE if picked else Palette.INK, PANEL_SKEW))
-		b.disabled = not (is_host and m["ready"]) or picked
+		b.disabled = not (is_host and m["ready"]) or (picked and not is_tut)
+		if is_tut:
+			if selected == "tutorial_a":
+				sub.text = "A  ·  FREE PRACTICE\n" + ("CLICK FOR B" if is_host else "")
+			elif selected == "tutorial_b":
+				sub.text = "B  ·  TRAINING COURSE\n" + ("CLICK FOR A" if is_host else "")
+			else:
+				sub.text = "TRY A OR B"
 		var pic := _map_pics[i]
 		if pic != null:
 			pic.set_shader_parameter("fill", fill)
