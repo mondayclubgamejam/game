@@ -56,7 +56,8 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Network protocol version. Bump it whenever an RPC's arguments change, so
 ## mismatched builds refuse each other with a clear message instead of
 ## failing on individual RPCs.
-const PROTOCOL := 7
+const PROTOCOL := 8
+const MAX_PLAYERS := 4
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
 const SERVER_NAME := "one-gun-one-bullet"       ## the name inside that certificate
@@ -69,8 +70,7 @@ var phase := Phase.LOBBY
 var room_seed := 0
 var room_no := 1
 var attempt := 1          ## tries at the current room: +1 on every restart, 1 on a new room
-var peer_a := 1
-var peer_b := 0
+var roster: Array = []    ## this round's players: [peer id, role, name] each
 var bullet_seq := 0       ## newest bullet action; older results are ignored
 var round_id := 0         ## bumps every round so stale timers do nothing
 var rtt := 0.0
@@ -84,7 +84,6 @@ var room: RefCounted
 var astar: AStarGrid2D
 var players := {}         ## peer id -> player
 var local_player: Player
-var partner: Player
 var enemies: Array = []
 var gun: Gun
 var bullet: Bullet
@@ -117,6 +116,10 @@ var _party_resume := false     ## host: the next start continues the current roo
 var _round_end := ""           ## host: "", "died" or "cleared": how the current round ended
 var _hosting_args: Array = []  ## LAN host: what the hosting screen shows, to show it again
 var _bot_swap_pending := false ## test bot: swap roles at the next match lobby
+var _bot_wait_players := 2     ## test bot: ready up once this many are in the lobby
+var _advertising := false      ## LAN host: announcing the game on the network
+var _spec_target: Player = null  ## who a dead player is watching
+var _spec_cam: Camera3D = null
 var _dedicated := false        ## this process is a --server
 var _relayed := false          ## this client plays through a dedicated server
 var _conn_stage := ""          ## client: "", "udp" or "ws" while connecting online
@@ -168,6 +171,7 @@ func _ready() -> void:
 	lobby.role_chosen.connect(func(role: int): _to_host("party_pick", [role]))
 	lobby.ready_toggled.connect(func(ready: bool): _to_host("party_ready", [ready]))
 	lobby.slowmo_toggled.connect(func(on: bool): _to_host("party_set_slowmo", [on]))
+	lobby.move_requested.connect(func(id: int, role: int): _to_host("party_move", [id, role]))
 
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -240,6 +244,8 @@ func _parse_args() -> void:
 			var bot := Bot.new()
 			bot.game = self
 			add_child(bot)
+		elif arg.begins_with("--wait-players="):
+			_bot_wait_players = arg.trim_prefix("--wait-players=").to_int()
 		elif arg.begins_with("--swap-after="):
 			# Test bot: ask to change roles after this many seconds of play.
 			var after := arg.trim_prefix("--swap-after=").to_float()
@@ -267,7 +273,7 @@ func _parse_args() -> void:
 
 func host_game(port: int) -> void:
 	var peer := ENetMultiplayerPeer.new()
-	var err := peer.create_server(port, 1)
+	var err := peer.create_server(port, MAX_PLAYERS - 1)
 	if err != OK:
 		lobby.show_menu("Couldn't host on port %d (error %d). Is another copy already hosting?" % [port, err], true)
 		return
@@ -275,6 +281,7 @@ func host_game(port: int) -> void:
 	_net_role = "host"
 	lan.stop_searching()
 	var answering := lan.start_advertising(port, lobby.player_name())
+	_advertising = true
 	_hosting_args = [port, LanDiscovery.best_addresses(), _firewall_hint(port), answering]
 	lobby.show_hosting(port, _hosting_args[1], _hosting_args[2], answering)
 	_party_reset()
@@ -315,13 +322,7 @@ func join_game(address: String, port: int) -> void:
 func _on_peer_connected(id: int) -> void:
 	if multiplayer.is_server():
 		welcome.rpc_id(id, PROTOCOL)
-	if _dedicated:
-		_server_on_join(id)
-	elif multiplayer.is_server() and phase == Phase.LOBBY:
-		_log_event("partner %d joined" % id)
-		lan.stop_advertising()  # one partner per game
-		_party_add(id, "PLAYER")
-		_party_broadcast("")
+		_member_join(id)
 
 
 func _on_connected() -> void:
@@ -356,10 +357,8 @@ func _on_lan_hosts(hosts: Array) -> void:
 
 
 func _on_peer_disconnected(id: int) -> void:
-	if _dedicated:
-		_server_on_leave(id)
-	elif multiplayer.is_server():
-		_host_partner_left(id)
+	if multiplayer.is_server():
+		_member_left(id)
 
 
 func _on_server_disconnected() -> void:
@@ -381,6 +380,7 @@ func _back_to_lobby(message: String, is_error := false) -> void:
 	lobby.visible = true
 	lobby.show_menu(message, is_error)
 	lan.stop_advertising()
+	_advertising = false
 	lan.stop_searching()
 	_party_reset()
 	pause.visible = false
@@ -435,50 +435,80 @@ func _server_tls(dir: String) -> TLSOptions:
 	return TLSOptions.server(key, cert)
 
 
-func _server_on_join(id: int) -> void:
-	var how: String = multiplayer.multiplayer_peer.transport_of(id)
-	if phase != Phase.LOBBY or _party_order.size() >= 2:
-		_log_event("player %d (%s) turned away: a game is already running" % [id, how])
+## Host side (LAN host or dedicated server): someone connected. They join the
+## match lobby if there's room and no game is running.
+func _member_join(id: int) -> void:
+	var how := "UDP"
+	if multiplayer.multiplayer_peer.has_method("transport_of"):
+		how = multiplayer.multiplayer_peer.transport_of(id)
+	if phase != Phase.LOBBY or _party_order.size() >= MAX_PLAYERS:
+		_log_event("player %d (%s) turned away: game full or already running" % [id, how])
 		server_busy.rpc_id(id)
 		get_tree().create_timer(0.5).timeout.connect(func():
 			if multiplayer.multiplayer_peer != null:
 				multiplayer.multiplayer_peer.disconnect_peer(id))
 		return
-	_log_event("player %d connected via %s (%d/2)" % [id, how, _party_order.size() + 1])
 	if _party_order.is_empty():
 		_party_resume = false
 	_party_add(id, "PLAYER")
+	_log_event("player %d connected via %s (%d/%d)" % [id, how, _party_order.size(), MAX_PLAYERS])
+	_update_advertising()
 	_party_broadcast("")
 
 
-func _server_on_leave(id: int) -> void:
+## Host side: someone left. A running game carries on while both roles are
+## still covered; otherwise everyone goes back to the match lobby (same room).
+func _member_left(id: int) -> void:
 	if not _party.has(id):
 		return
+	var who: String = _party[id]["name"]
 	_log_event("player %d left" % id)
 	_party_remove(id)
-	if phase != Phase.LOBBY:
+	if phase != Phase.LOBBY and _in_roster(id):
+		if _party_viable():
+			player_left.rpc(id)
+			return
 		_clear_round()
 		round_id += 1
 		phase = Phase.LOBBY
-	_party_resume = false  # a new partner starts a new game
-	_party_broadcast("Your partner left.")
+		_party_resume = true
+	if _party_order.is_empty():
+		_party_resume = false
+	_update_advertising()
+	if not _dedicated and _party_order.size() <= 1:
+		_host_show_waiting("%s left." % who)
+	else:
+		_party_broadcast("%s left." % who)
 
 
-## LAN host: the partner left. Keep hosting and wait for someone else.
-func _host_partner_left(id: int) -> void:
-	_log_event("partner %d left" % id)
-	_party_remove(id)
-	_clear_round()
-	round_id += 1
-	phase = Phase.LOBBY
+## LAN host alone again: back to the hosting screen (still hosting).
+func _host_show_waiting(note: String) -> void:
 	_party_resume = false
 	hud.visible = false
 	hand.visible = false
 	pause.visible = false
 	lobby.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	var answering := lan.start_advertising(_hosting_args[0], lobby.player_name())
-	lobby.show_hosting(_hosting_args[0], _hosting_args[1], _hosting_args[2], answering, "Your partner left.")
+	lobby.show_hosting(_hosting_args[0], _hosting_args[1], _hosting_args[2], true, note)
+
+
+## LAN host: announce the game while the lobby has room, stop otherwise.
+func _update_advertising() -> void:
+	if _dedicated or _net_role != "host":
+		return
+	var want := phase == Phase.LOBBY and _party_order.size() < MAX_PLAYERS
+	if want and not _advertising:
+		lan.start_advertising(_hosting_args[0], lobby.player_name())
+	elif not want and _advertising:
+		lan.stop_advertising()
+	_advertising = want
+
+
+func _in_roster(id: int) -> bool:
+	for r in roster:
+		if r[0] == id:
+			return true
+	return false
 
 
 # --- Match lobby (pick roles, ready up) ---------------------------------------------
@@ -489,13 +519,25 @@ func _party_reset() -> void:
 	_party_resume = false
 
 
-## Newcomers get whichever role is free.
+## Newcomers join the smaller column (normal on a tie).
 func _party_add(id: int, player_name: String) -> void:
-	var taken := []
+	var normal := 0
+	var inverted := 0
 	for m in _party.values():
-		taken.append(m["role"])
-	_party[id] = {"name": player_name, "role": ROLE_REVERSE if taken.has(ROLE_FORWARD) else ROLE_FORWARD, "ready": false}
+		if m["role"] == ROLE_FORWARD:
+			normal += 1
+		else:
+			inverted += 1
+	_party[id] = {"name": player_name, "role": ROLE_REVERSE if inverted < normal else ROLE_FORWARD, "ready": false}
 	_party_order.append(id)
+
+
+## A game needs at least one normal and one inverted player.
+func _party_viable() -> bool:
+	var roles := {}
+	for m in _party.values():
+		roles[m["role"]] = true
+	return roles.has(ROLE_FORWARD) and roles.has(ROLE_REVERSE)
 
 
 func _party_remove(id: int) -> void:
@@ -574,15 +616,24 @@ func _party_leader() -> int:
 	return _party_order[0] if not _party_order.is_empty() else 0
 
 
-## The host picks their own role; the partner gets the other one. Ready resets.
+## Anyone: join the normal or inverted column. Everyone's ready resets.
 @rpc("any_peer", "call_remote", "reliable")
 func party_pick(role: int) -> void:
-	var id := _sender()
-	if not multiplayer.is_server() or id != _party_leader() or phase != Phase.LOBBY or role < 0 or role > 1:
+	_party_set_role(_sender(), role)
+
+
+## The host: move a player to the other column.
+@rpc("any_peer", "call_remote", "reliable")
+func party_move(target: int, role: int) -> void:
+	if _sender() == _party_leader():
+		_party_set_role(target, role)
+
+
+func _party_set_role(id: int, role: int) -> void:
+	if not multiplayer.is_server() or not _party.has(id) or phase != Phase.LOBBY or role < 0 or role > 1:
 		return
-	for other in _party:
-		if other != id and _party[other]["role"] == role:
-			_party[other]["role"] = 1 - role
+	if _party[id]["role"] == role:
+		return
 	_party[id]["role"] = role
 	for m in _party.values():
 		m["ready"] = false
@@ -595,7 +646,7 @@ func party_ready(ready: bool) -> void:
 	if not multiplayer.is_server() or not _party.has(id) or phase != Phase.LOBBY:
 		return
 	_party[id]["ready"] = ready
-	var all_ready := _party.size() == 2
+	var all_ready := _party.size() >= 2 and _party_viable()
 	for m in _party.values():
 		all_ready = all_ready and m["ready"]
 	if all_ready:
@@ -638,21 +689,19 @@ func _resume_attempt() -> int:
 
 
 func _party_start() -> void:
-	var a := 0
-	var b := 0
-	for id in _party:
-		if _party[id]["role"] == ROLE_FORWARD:
-			a = id
-		else:
-			b = id
+	var team := []
+	for id in _party_order:
+		team.append([id, _party[id]["role"], _party[id]["name"]])
 	for m in _party.values():
 		m["ready"] = false
-	if _party_resume and _round_end == "cleared":
-		start_round.rpc(_new_seed(), room_no + 1, 1, a, b)
+	# A different number of players means a different room.
+	var same_team_size := team.size() == roster.size()
+	if _party_resume and _round_end != "cleared" and same_team_size:
+		start_round.rpc(room_seed, room_no, _resume_attempt(), team)
 	elif _party_resume:
-		start_round.rpc(room_seed, room_no, _resume_attempt(), a, b)
+		start_round.rpc(_new_seed(), room_no + (1 if _round_end == "cleared" else 0), 1, team)
 	else:
-		start_round.rpc(_new_seed(), 1, 1, a, b)
+		start_round.rpc(_new_seed(), 1, 1, team)
 	_party_resume = false
 
 
@@ -674,21 +723,26 @@ func party_state(members: Array, info: String, note: String, slowmo: bool, leade
 		list.append({"id": m[0], "name": m[1], "role": m[2], "ready": m[3]})
 	lobby.show_party(list, multiplayer.get_unique_id(), leader, info, slowmo, note)
 	_log_event("match lobby: %s" % [members])
-	# The test bot readies up as soon as there's a partner.
-	if _bot_mode and members.size() == 2:
+	# The test bot readies up as soon as it has company.
+	if _bot_mode and members.size() >= _bot_wait_players:
 		for m in list:
 			if m["id"] == multiplayer.get_unique_id() and not m["ready"]:
 				if _bot_swap_pending and leader == multiplayer.get_unique_id():
+					# Test: the host swaps sides with everyone on the other side.
 					_bot_swap_pending = false
-					var other_role: int = 1 - m["role"]
-					get_tree().create_timer(0.2).timeout.connect(func(): _to_host("party_pick", [other_role]))
+					var mine: int = m["role"]
+					get_tree().create_timer(0.2).timeout.connect(func():
+						for other in list:
+							if other["id"] != m["id"] and other["role"] != mine:
+								_to_host("party_move", [other["id"], mine])
+						_to_host("party_pick", [1 - mine]))
 				else:
 					get_tree().create_timer(0.2).timeout.connect(func(): _to_host("party_ready", [true]))
 
 
 @rpc("authority", "call_remote", "reliable")
 func server_busy() -> void:
-	_back_to_lobby("The server already has a game running. Try again in a bit.", true)
+	_back_to_lobby("That game is full or already playing. Try again in a bit.", true)
 
 
 # --- Joining a server online ---------------------------------------------------------
@@ -786,16 +840,16 @@ func _new_seed() -> int:
 # --- Rounds ------------------------------------------------------------------------
 
 @rpc("authority", "call_local", "reliable")
-func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: int) -> void:
+## `team`: [peer id, role, name] for every player in this round.
+func start_round(seed_in: int, number: int, try_no: int, team: Array) -> void:
 	_clear_round()
 	round_id += 1
 	room_seed = seed_in
 	room_no = number
 	attempt = try_no
 	_round_end = ""
-	peer_a = a_peer
-	peer_b = b_peer
-	room = RoomGen.generate(seed_in)
+	roster = team
+	room = RoomGen.generate(seed_in, team.size())
 	astar = RoomBuilder.build_astar(room)
 	round_root = Node3D.new()
 	round_root.name = "Round"
@@ -803,15 +857,18 @@ func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: in
 	round_root.add_child(RoomBuilder.build(room))
 
 	var me := multiplayer.get_unique_id()
-	for spec in [[a_peer, ROLE_FORWARD, room.spawn_a], [b_peer, ROLE_REVERSE, room.spawn_b]]:
+	var first_normal := 0
+	for i in team.size():
+		var entry: Array = team[i]
 		var p := Player.new()
-		p.setup(spec[0], spec[1], spec[0] == me)
+		p.setup(entry[0], entry[1], entry[0] == me)
+		p.player_name = entry[2]
 		round_root.add_child(p)
-		p.place(RoomGen.cell_center(spec[2]) + Vector3(0, 0.05, 0), PI)  # face into the room
-		players[spec[0]] = p
+		p.place(RoomGen.cell_center(room.spawns[i]) + Vector3(0, 0.05, 0), PI)  # face into the room
+		players[entry[0]] = p
+		if first_normal == 0 and entry[1] == ROLE_FORWARD:
+			first_normal = entry[0]
 	local_player = players.get(me)
-	if local_player != null:
-		partner = players[b_peer if me == a_peer else a_peer]
 
 	for i in room.enemy_cells.size():
 		var e := Enemy.new()
@@ -827,7 +884,7 @@ func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: in
 
 	gun = Gun.new()
 	round_root.add_child(gun)
-	gun.hold(players[a_peer])
+	gun.hold(players[first_normal])
 	gun.set_loaded(true)
 	bullet = Bullet.new()
 	round_root.add_child(bullet)
@@ -839,7 +896,8 @@ func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: in
 	round_root.add_child(tracers)
 	if local_player != null:
 		tracers.local_body = local_player
-		tracers.ignore.append(partner.get_rid())
+		for mate in teammates():
+			tracers.ignore.append(mate.get_rid())  # their own machine decides their hits
 		tracers.hit_local.connect(_on_local_shot)
 	debris = Debris.new()
 	round_root.add_child(debris)
@@ -851,9 +909,15 @@ func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: in
 	phase = Phase.PLAYING
 	_update_carry()
 
-	lan.stop_advertising()  # one partner per game
+	lan.stop_advertising()  # nobody joins mid-game
+	_advertising = false
 	lan.stop_searching()
-	_log_event("round %d try %d seed %d: %d enemies, forward=%d reverse=%d" % [number, try_no, seed_in, enemies.size(), a_peer, b_peer])
+	var normals := []
+	var inverts := []
+	for entry in team:
+		(normals if entry[1] == ROLE_FORWARD else inverts).append(entry[0])
+	_log_event("round %d try %d seed %d: %d players, %d enemies, normal=%s inverted=%s"
+		% [number, try_no, seed_in, team.size(), enemies.size(), normals, inverts])
 	if local_player == null:
 		return  # dedicated server: no screen to update
 	lobby.visible = false
@@ -880,7 +944,9 @@ func _clear_round() -> void:
 	enemies.clear()
 	_targeted.clear()
 	local_player = null
-	partner = null
+	_spec_target = null
+	_spec_cam = null
+	hud.spectating = ""
 	gun = null
 	bullet = null
 	tracers = null
@@ -905,31 +971,70 @@ func room_cleared() -> void:
 	hud.banner("CLEAR!", Palette.ENEMY)
 	_log_event("room cleared")
 	if multiplayer.is_server():
-		_later(NEXT_ROOM_DELAY, func(): start_round.rpc(_new_seed(), room_no + 1, 1, peer_a, peer_b))
+		_later(NEXT_ROOM_DELAY, func(): start_round.rpc(_new_seed(), room_no + 1, 1, roster))
 
 
+## A player died. The attempt goes on until everyone is down; the dead
+## spectate a teammate. A dead player's gun drops where they fell.
 @rpc("any_peer", "call_local", "reliable")
 func player_down(peer: int, cause: String) -> void:
-	if phase == Phase.LOBBY:
-		return
-	var p: Player = players.get(peer)
-	if p != null:
-		p.kill()
 	if phase != Phase.PLAYING:
 		return
+	var p: Player = players.get(peer)
+	if p == null or not p.alive:
+		return
+	p.kill()
+	var me := peer == multiplayer.get_unique_id()
+	hud.banner("YOU DIED" if me else "%s DOWN" % p.player_name, Palette.DANGER)
+	_log_event("player %d down (%s)" % [peer, cause])
+	if gun != null and gun.state == Gun.HELD and gun.holder == p:
+		gun.drop_at(p.global_position)
+		_update_carry()
+	if me:
+		_later(1.2, _spectate_next)
+	if multiplayer.is_server():
+		_check_all_down()
+
+
+## Host: when nobody is left standing, the attempt is over.
+func _check_all_down() -> void:
+	if phase == Phase.PLAYING and living_players().is_empty():
+		all_down.rpc()
+
+
+@rpc("authority", "call_local", "reliable")
+func all_down() -> void:
 	phase = Phase.OVER
 	_round_end = "died"
-	var me := peer == multiplayer.get_unique_id()
-	hud.banner("YOU DIED" if me else "PARTNER DOWN", Palette.DANGER)
-	_log_event("player %d down (%s)" % [peer, cause])
+	hud.banner("EVERYONE'S DOWN", Palette.DANGER)
+	_log_event("everyone down")
 	if multiplayer.is_server():
-		_later(RESTART_DELAY, func(): start_round.rpc(room_seed, room_no, attempt + 1, peer_a, peer_b))
+		_later(RESTART_DELAY, func(): start_round.rpc(room_seed, room_no, attempt + 1, roster))
+
+
+## Host -> everyone: a player left mid-game and the rest carry on.
+@rpc("authority", "call_local", "reliable")
+func player_left(peer: int) -> void:
+	var p: Player = players.get(peer)
+	for i in range(roster.size() - 1, -1, -1):
+		if roster[i][0] == peer:
+			roster.remove_at(i)
+	if p == null:
+		return
+	hud.banner("%s LEFT" % p.player_name, Palette.DANGER)
+	if gun != null and gun.state == Gun.HELD and gun.holder == p:
+		gun.drop_at(p.global_position)
+	players.erase(peer)
+	p.queue_free()
+	_update_carry()
+	if multiplayer.is_server():
+		_check_all_down()
 
 
 @rpc("any_peer", "call_remote", "reliable")
 func request_restart() -> void:
 	if multiplayer.is_server() and phase != Phase.LOBBY:
-		start_round.rpc(room_seed, room_no, attempt + 1, peer_a, peer_b)
+		start_round.rpc(room_seed, room_no, attempt + 1, roster)
 
 
 func _local_died(cause: String) -> void:
@@ -954,6 +1059,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		get_viewport().set_input_as_handled()
+	elif local_player != null and not local_player.alive \
+			and (event.is_action_pressed("primary") or event.is_action_pressed("jump")):
+		_spectate_next()
 	elif event.is_action_pressed("primary"):
 		try_primary()
 	elif event.is_action_pressed("throw"):
@@ -963,6 +1071,39 @@ func _unhandled_input(event: InputEvent) -> void:
 			request_restart()
 		else:
 			request_restart.rpc_id(1)
+
+
+## Everyone else in this round.
+func teammates() -> Array:
+	var out := []
+	for p in players.values():
+		if p != local_player:
+			out.append(p)
+	return out
+
+
+## Dead players watch a living teammate; click (or Space) for the next one.
+func _spectate_next() -> void:
+	if local_player == null or local_player.alive or phase == Phase.LOBBY:
+		return
+	var living := []
+	for p in teammates():
+		if p.alive:
+			living.append(p)
+	if living.is_empty():
+		return
+	var next: Player = living[(living.find(_spec_target) + 1) % living.size()]
+	_spec_target = next
+	if _spec_cam == null or not is_instance_valid(_spec_cam):
+		_spec_cam = Camera3D.new()
+		_spec_cam.fov = 82.0
+		_spec_cam.near = 0.05
+	if _spec_cam.get_parent() != null:
+		_spec_cam.get_parent().remove_child(_spec_cam)
+	next.head.add_child(_spec_cam)
+	_spec_cam.position = Vector3(0, 0.05, -0.32)  # just in front of their visor
+	_spec_cam.make_current()
+	hud.spectating = next.player_name
 
 
 func _open_pause() -> void:
@@ -1017,19 +1158,42 @@ func try_throw() -> void:
 	gun_thrown.rpc(multiplayer.get_unique_id(), from, _throw_velocity(from))
 
 
-## Aim assist: if the partner is roughly in the crosshair and visible, lead
+## Aim assist: if a teammate is roughly in the crosshair and visible, lead
 ## them and throw on an arc that reaches their chest.
 func _throw_velocity(from: Vector3) -> Vector3:
 	var aim := local_player.aim_dir()
-	if partner != null and partner.alive:
-		var target := partner.chest_pos()
-		var to := target - from
-		if aim.dot(to.normalized()) > cos(deg_to_rad(THROW_ASSIST_DEG)) and _ray_world(from, target) == null:
-			var flight := clampf(to.length() / Traj.THROW_SPEED, 0.3, 1.1)
-			var lead := partner.velocity_estimate() * flight
-			lead.y = 0.0
-			return Traj.throw_velocity(from, target + lead)
+	# The living teammate closest to the crosshair, if any is near it and visible.
+	var best: Player = null
+	var best_dot := cos(deg_to_rad(THROW_ASSIST_DEG))
+	for mate in teammates():
+		if not mate.alive:
+			continue
+		var dot := aim.dot((mate.chest_pos() - from).normalized())
+		if dot > best_dot and _ray_world(from, mate.chest_pos()) == null:
+			best = mate
+			best_dot = dot
+	if best != null:
+		var target := best.chest_pos()
+		var flight := clampf((target - from).length() / Traj.THROW_SPEED, 0.3, 1.1)
+		var lead := best.velocity_estimate() * flight
+		lead.y = 0.0
+		return Traj.throw_velocity(from, target + lead)
 	return Traj.free_throw_velocity(aim)
+
+
+## Who the gun should go to next: the nearest living teammate who can use it
+## (normal players when it's loaded, inverted ones when it's empty).
+func pass_target() -> Player:
+	var best: Player = null
+	var best_d := INF
+	var want := ROLE_FORWARD if gun != null and gun.loaded else ROLE_REVERSE
+	for mate in teammates():
+		if mate.alive and mate.role == want:
+			var d := local_player.global_position.distance_to(mate.global_position)
+			if d < best_d:
+				best = mate
+				best_d = d
+	return best
 
 
 # --- Bullet events -------------------------------------------------------------------
@@ -1323,7 +1487,7 @@ func _physics_process(delta: float) -> void:
 		_ping_t -= delta
 		if _ping_t <= 0.0:
 			_ping_t = PING_INTERVAL
-			# Ping whoever hosts: the server when relayed, else the partner.
+			# Ping whoever hosts: the server when relayed, else the LAN host.
 			if multiplayer.is_server():
 				net_ping.rpc(Time.get_ticks_usec())
 			else:
@@ -1386,6 +1550,8 @@ func _process(_delta: float) -> void:
 	hud.targets = _enemies_left
 	hud.can_act = can_fire() or can_recall()
 	hud.ping_ms = int(rtt * 1000.0) if rtt > 0.0 else -1
+	if not local_player.alive and _spec_target != null and is_instance_valid(_spec_target) and not _spec_target.alive:
+		_spectate_next()  # the teammate we watched went down too
 	_update_markers()
 	hud.slowmo = inverse_lerp(1.0, Clock.SLOW, Clock.scale)
 
@@ -1429,9 +1595,10 @@ func _update_preview() -> void:
 				break  # don't draw the last bit right into the camera
 			_preview_pts[n] = q
 			n += 1
-	if hits.has(partner):
-		hits.erase(partner)
-		color = Palette.DANGER  # friendly fire: this would kill your partner
+	for hit in hits.duplicate():
+		if hit is Player:
+			hits.erase(hit)
+			color = Palette.DANGER  # friendly fire: this would kill a teammate
 	if n >= 2:
 		aim_line.show_path(_preview_pts, n, color)
 	else:
@@ -1449,7 +1616,7 @@ func _set_targets(list: Array) -> void:
 	_targeted = list
 
 
-## Collects every enemy (and the partner) on the segment a -> b into `out`.
+## Collects every enemy (and teammate) on the segment a -> b into `out`.
 func _scan_segment(a: Vector3, b: Vector3, out: Array) -> void:
 	var space := get_world_3d().direct_space_state
 	_seg_exclude.clear()
@@ -1482,11 +1649,17 @@ func _ray_world(a: Vector3, b: Vector3) -> Variant:
 
 func _update_markers() -> void:
 	hud.markers.clear()
-	if partner != null:
-		var label := "NORMAL" if partner.role == ROLE_FORWARD else "INVERTED"
-		if partner.carrying:
+	for mate in teammates():
+		if mate == _spec_target:
+			continue  # we're looking through their eyes
+		var label: String = mate.player_name
+		var col := Palette.role_color(mate.role)
+		if not mate.alive:
+			label += "  (DOWN)"
+			col = Palette.MUTED
+		elif mate.carrying:
 			label += "  ·  GUN"
-		_add_marker(partner.global_position + Vector3(0, 2.4, 0), Palette.role_color(partner.role), label)
+		_add_marker(mate.global_position + Vector3(0, 2.4, 0), col, label)
 	if gun != null and gun.holder != local_player and gun.state != Gun.HELD:
 		_add_marker(gun.global_position + Vector3(0, 0.5, 0), Palette.SIGNAL, "GUN")
 	if bullet != null and bullet.state == Bullet.LODGED:
@@ -1494,7 +1667,9 @@ func _update_markers() -> void:
 
 
 func _add_marker(world: Vector3, col: Color, label: String) -> void:
-	var cam: Camera3D = local_player.camera
+	var cam := get_viewport().get_camera_3d()  # ours, or a teammate's while spectating
+	if cam == null or absf(cam.to_local(world).z) < 0.05:
+		return  # no camera, or the point sits on the camera plane and can't be projected
 	var view := hud.size
 	var behind := cam.is_position_behind(world)
 	var p := cam.unproject_position(world)

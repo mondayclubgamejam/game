@@ -39,6 +39,7 @@ var input_enabled := true
 var bot_move := Vector2.ZERO ## used by the test bot instead of the keyboard
 var bot_crouch := false
 var move_amount := 0.0       ## 0..1+, read by the hand overlay for bob
+var player_name := "PLAYER"
 var crouching := false
 
 var head: Node3D
@@ -267,6 +268,7 @@ func kill() -> void:
 	if not alive:
 		return
 	alive = false
+	collision_layer = 0  # the fallen no longer stop bullets or get hit
 	var tw := create_tween()
 	if is_local:
 		tw.tween_property(head, "position:y", 0.35, 0.45).set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)

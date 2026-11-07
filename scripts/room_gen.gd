@@ -7,8 +7,9 @@ extends RefCounted
 
 enum Kind { GUNMAN, KNIFE, FISTS }
 
-const W := 18
-const H := 14
+## Room size grows with the number of players (index = players).
+const SIZES := {2: Vector2i(18, 14), 3: Vector2i(21, 16), 4: Vector2i(24, 18)}
+const MAX_PLAYERS := 4
 const TILE := 2.0
 const SPAWN_ROWS := 3          ## rows 1..3 stay free of cover
 const MIN_ENEMY_DIST := 6.5    ## cells from the spawn point
@@ -18,29 +19,45 @@ const WALL := 1                ## full-height wall
 const CRATE := 2               ## waist-high crate: hides a crouching player, can be jumped on
 
 var seed_value := 0
-var solid := PackedByteArray()  ## W * H: 0 floor, WALL or CRATE
-var spawn_a := Vector2i.ZERO
-var spawn_b := Vector2i.ZERO
+var players := 2
+var cols := 18
+var rows := 14
+var solid := PackedByteArray()  ## cols * rows: 0 floor, WALL or CRATE
+var spawns: Array[Vector2i] = []  ## one per player, side by side on the spawn row
 var enemy_cells: Array[Vector2i] = []
 var enemy_kinds: PackedByteArray = PackedByteArray()
 var boxes: Array[Rect2i] = []   ## merged wall rectangles, in cells
 var crates: Array[Vector2i] = []
 
 
-static func generate(seed_in: int) -> RefCounted:
+## `player_count` (2-4) makes the room bigger and adds enemies.
+static func generate(seed_in: int, player_count := 2) -> RefCounted:
 	var room = new()
-	room._build(seed_in)
+	room._build(seed_in, clampi(player_count, 2, MAX_PLAYERS))
 	return room
 
 
+## Average of the spawn cells.
+func spawn_center() -> Vector2:
+	var sum := Vector2.ZERO
+	for c in spawns:
+		sum += Vector2(c)
+	return sum / spawns.size()
+
+
+## How much bigger than the two-player room this one is.
+func _area_scale() -> float:
+	return float(cols * rows) / float(SIZES[2].x * SIZES[2].y)
+
+
 func is_solid(c: Vector2i) -> bool:
-	if c.x < 0 or c.y < 0 or c.x >= W or c.y >= H:
+	if c.x < 0 or c.y < 0 or c.x >= cols or c.y >= rows:
 		return true
-	return solid[c.y * W + c.x] != 0
+	return solid[c.y * cols + c.x] != 0
 
 
 func is_wall(c: Vector2i) -> bool:
-	return solid[c.y * W + c.x] == WALL
+	return solid[c.y * cols + c.x] == WALL
 
 
 static func cell_center(c: Vector2i) -> Vector3:
@@ -60,38 +77,42 @@ func reachable_count(from: Vector2i) -> int:
 	if is_solid(from):
 		return 0
 	var seen := PackedByteArray()
-	seen.resize(W * H)
+	seen.resize(cols * rows)
 	var stack: Array[Vector2i] = [from]
-	seen[from.y * W + from.x] = 1
+	seen[from.y * cols + from.x] = 1
 	var count := 0
 	while not stack.is_empty():
 		var c: Vector2i = stack.pop_back()
 		count += 1
 		for d: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
 			var n := c + d
-			if is_solid(n) or seen[n.y * W + n.x] == 1:
+			if is_solid(n) or seen[n.y * cols + n.x] == 1:
 				continue
-			seen[n.y * W + n.x] = 1
+			seen[n.y * cols + n.x] = 1
 			stack.push_back(n)
 	return count
 
 
-func _build(seed_in: int) -> void:
+func _build(seed_in: int, player_count: int) -> void:
 	seed_value = seed_in
+	players = player_count
+	cols = SIZES[players].x
+	rows = SIZES[players].y
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_in
 
-	solid.resize(W * H)
+	solid.resize(cols * rows)
 	solid.fill(0)
-	for x in W:
+	for x in cols:
 		_mark(Vector2i(x, 0), 1)
-		_mark(Vector2i(x, H - 1), 1)
-	for y in H:
+		_mark(Vector2i(x, rows - 1), 1)
+	for y in rows:
 		_mark(Vector2i(0, y), 1)
-		_mark(Vector2i(W - 1, y), 1)
+		_mark(Vector2i(cols - 1, y), 1)
 
-	spawn_a = Vector2i(W / 2 - 2, 1)
-	spawn_b = Vector2i(W / 2 + 1, 1)
+	var first := cols / 2 - (players - 1)
+	for i in players:
+		spawns.append(Vector2i(first + 2 * i, 1))
 
 	_place_cover(rng)
 	_place_crates(rng)
@@ -100,20 +121,20 @@ func _build(seed_in: int) -> void:
 
 
 func _mark(c: Vector2i, v: int) -> void:
-	solid[c.y * W + c.x] = v
+	solid[c.y * cols + c.x] = v
 
 
 func _place_cover(rng: RandomNumberGenerator) -> void:
-	var wanted := rng.randi_range(10, 15)
+	var wanted := roundi(rng.randi_range(10, 15) * _area_scale())
 	var placed := 0
 	var tries := 0
 	var total_floor := floor_count()
-	while placed < wanted and tries < 200:
+	while placed < wanted and tries < roundi(200 * _area_scale()):
 		tries += 1
 		var cells := _random_piece(rng)
 		var ok := true
 		for c in cells:
-			if c.x < 1 or c.x > W - 2 or c.y <= SPAWN_ROWS or c.y > H - 2 or is_solid(c):
+			if c.x < 1 or c.x > cols - 2 or c.y <= SPAWN_ROWS or c.y > rows - 2 or is_solid(c):
 				ok = false
 				break
 		if not ok:
@@ -121,7 +142,7 @@ func _place_cover(rng: RandomNumberGenerator) -> void:
 		for c in cells:
 			_mark(c, 1)
 		# Reject pieces that cut the room into separate parts.
-		if reachable_count(spawn_a) != total_floor - cells.size():
+		if reachable_count(spawns[0]) != total_floor - cells.size():
 			for c in cells:
 				_mark(c, 0)
 			continue
@@ -132,25 +153,25 @@ func _place_cover(rng: RandomNumberGenerator) -> void:
 ## Low crates, singly or in pairs, anywhere off the spawn rows that doesn't
 ## cut the room in two.
 func _place_crates(rng: RandomNumberGenerator) -> void:
-	var wanted := rng.randi_range(6, 10)
+	var wanted := roundi(rng.randi_range(6, 10) * _area_scale())
 	var placed := 0
 	var total_floor := floor_count()
-	for attempt in 120:
+	for attempt in roundi(120 * _area_scale()):
 		if placed >= wanted:
 			break
-		var c := Vector2i(rng.randi_range(1, W - 2), rng.randi_range(SPAWN_ROWS + 1, H - 2))
+		var c := Vector2i(rng.randi_range(1, cols - 2), rng.randi_range(SPAWN_ROWS + 1, rows - 2))
 		var cells: Array[Vector2i] = [c]
 		if rng.randf() < 0.35:
 			cells.append(c + (Vector2i.RIGHT if rng.randf() < 0.5 else Vector2i.DOWN))
 		var ok := true
 		for cell in cells:
-			if cell.x > W - 2 or cell.y > H - 2 or is_solid(cell):
+			if cell.x > cols - 2 or cell.y > rows - 2 or is_solid(cell):
 				ok = false
 		if not ok:
 			continue
 		for cell in cells:
 			_mark(cell, CRATE)
-		if reachable_count(spawn_a) != total_floor - cells.size():
+		if reachable_count(spawns[0]) != total_floor - cells.size():
 			for cell in cells:
 				_mark(cell, 0)
 			continue
@@ -160,7 +181,7 @@ func _place_crates(rng: RandomNumberGenerator) -> void:
 
 
 func _random_piece(rng: RandomNumberGenerator) -> Array[Vector2i]:
-	var origin := Vector2i(rng.randi_range(1, W - 2), rng.randi_range(SPAWN_ROWS + 1, H - 2))
+	var origin := Vector2i(rng.randi_range(1, cols - 2), rng.randi_range(SPAWN_ROWS + 1, rows - 2))
 	var cells: Array[Vector2i] = []
 	var roll := rng.randf()
 	if roll < 0.6:
@@ -179,11 +200,13 @@ func _random_piece(rng: RandomNumberGenerator) -> Array[Vector2i]:
 
 
 func _place_enemies(rng: RandomNumberGenerator) -> void:
-	var wanted := rng.randi_range(MIN_ENEMIES, MAX_ENEMIES)
-	var spawn_mid := Vector2(spawn_a + spawn_b) * 0.5
+	# Four more enemies per player beyond two, with a few more gunmen.
+	var wanted := rng.randi_range(MIN_ENEMIES, MAX_ENEMIES) + 4 * (players - 2)
+	var gunman_share := 0.4 + 0.05 * (players - 2)
+	var spawn_mid := spawn_center()
 	var candidates: Array[Vector2i] = []
-	for y in H:
-		for x in W:
+	for y in rows:
+		for x in cols:
 			var c := Vector2i(x, y)
 			if not is_solid(c) and Vector2(c).distance_to(spawn_mid) >= MIN_ENEMY_DIST:
 				candidates.append(c)
@@ -205,26 +228,26 @@ func _place_enemies(rng: RandomNumberGenerator) -> void:
 			continue
 		enemy_cells.append(c)
 		var roll := rng.randf()
-		var kind := Kind.GUNMAN if roll < 0.4 else (Kind.KNIFE if roll < 0.7 else Kind.FISTS)
+		var kind := Kind.GUNMAN if roll < gunman_share else (Kind.KNIFE if roll < gunman_share + 0.3 else Kind.FISTS)
 		enemy_kinds.append(kind)
 
 
 ## Greedy rectangle merge of wall cells so the room needs few boxes.
 func _merge_boxes() -> void:
 	var used := PackedByteArray()
-	used.resize(W * H)
-	for y in H:
-		for x in W:
-			if solid[y * W + x] != WALL or used[y * W + x] == 1:
+	used.resize(cols * rows)
+	for y in rows:
+		for x in cols:
+			if solid[y * cols + x] != WALL or used[y * cols + x] == 1:
 				continue
 			var w := 1
-			while x + w < W and solid[y * W + x + w] == WALL and used[y * W + x + w] == 0:
+			while x + w < cols and solid[y * cols + x + w] == WALL and used[y * cols + x + w] == 0:
 				w += 1
 			var h := 1
 			var grow := true
-			while grow and y + h < H:
+			while grow and y + h < rows:
 				for i in w:
-					var k := (y + h) * W + x + i
+					var k := (y + h) * cols + x + i
 					if solid[k] != WALL or used[k] == 1:
 						grow = false
 						break
@@ -232,5 +255,5 @@ func _merge_boxes() -> void:
 					h += 1
 			for yy in h:
 				for xx in w:
-					used[(y + yy) * W + x + xx] = 1
+					used[(y + yy) * cols + x + xx] = 1
 			boxes.append(Rect2i(x, y, w, h))

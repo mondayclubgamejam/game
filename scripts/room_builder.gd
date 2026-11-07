@@ -20,7 +20,7 @@ static func build(room: RefCounted) -> Node3D:
 	var root := Node3D.new()
 	root.name = "Room"
 	var tile := RoomGen.TILE
-	var extent := Vector2(RoomGen.W * tile, RoomGen.H * tile)
+	var extent := Vector2(room.cols * tile, room.rows * tile)
 
 	var floor_mesh := PlaneMesh.new()
 	floor_mesh.size = extent
@@ -121,12 +121,12 @@ static func build(room: RefCounted) -> Node3D:
 
 static func build_astar(room: RefCounted) -> AStarGrid2D:
 	var grid := AStarGrid2D.new()
-	grid.region = Rect2i(0, 0, RoomGen.W, RoomGen.H)
+	grid.region = Rect2i(0, 0, room.cols, room.rows)
 	grid.cell_size = Vector2(RoomGen.TILE, RoomGen.TILE)
 	grid.diagonal_mode = AStarGrid2D.DIAGONAL_MODE_ONLY_IF_NO_OBSTACLES
 	grid.update()
-	for y in RoomGen.H:
-		for x in RoomGen.W:
+	for y in room.rows:
+		for x in room.cols:
 			if room.is_solid(Vector2i(x, y)):
 				grid.set_point_solid(Vector2i(x, y), true)
 	return grid

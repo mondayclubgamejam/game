@@ -2,14 +2,14 @@
 
 Monday Club game jam project, built with [Godot 4.7](https://godotengine.org/).
 
-A two-player online co-op shooter about time direction. Two players share **one gun with one bullet**:
+An online co-op shooter about time direction for **2 to 4 players**, who all share **one gun with one bullet**:
 
 - The **normal** player can only **fire**. The bullet passes through every enemy in its path and sticks in the first wall.
 - The **inverted** player can only **recall**. The bullet rips out of wherever it stuck and curves back into their gun, killing everything on the way. A recall can't pass through walls: it sticks in any wall in the way, and the inverted player has to find a clear angle.
 
 The host picks who's normal and who's inverted in the match lobby.
 
-So you must **throw the gun to each other** after every shot and every recall. Carrying the gun slows you down. Friendly fire is on, enemies die in one hit and so do you, and if either player dies the room restarts. Clear every enemy to get a new procedurally generated room.
+So you must **throw the gun to each other** after every shot and every recall. Carrying the gun slows you down. Friendly fire is on, and enemies die in one hit and so do you. **A player who dies watches a teammate** (click for the next one); the attempt only ends when everyone is down, and then the room restarts. Clear every enemy to get a new procedurally generated room. **Bigger groups get bigger rooms and more enemies** (4 more per player beyond two).
 
 Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md). Visual style: [`game-style/STYLE_BRIEF.md`](game-style/STYLE_BRIEF.md).
 
@@ -37,12 +37,12 @@ It builds the game the first time (about 30 seconds; it fetches Godot by itself)
 | Ctrl / C | Crouch: shorter and slower, so a crate hides you from gunmen |
 | Mouse | Look and aim |
 | Left click / F | Fire (normal) or recall (inverted) |
-| Right click / Q | Throw the gun (aims itself at your partner when they're near the crosshair) |
+| Right click / Q | Throw the gun (aims itself at the teammate nearest the crosshair) |
 | Walk into the gun | Catch it in the air or pick it up off the floor |
 | R | Restart the room |
 | Esc | Pause menu: resume, change roles, leave the match, quit |
 
-The aim line shows where the shot or recall will go: orange for a shot, blue for a recall, **red** when it's blocked by a wall or would hit your partner. Enemies on the path light up yellow.
+The aim line shows where the shot or recall will go: orange for a shot, blue for a recall, **red** when it's blocked by a wall or would hit a teammate. Enemies on the path light up yellow.
 
 ### How it plays
 
@@ -53,15 +53,15 @@ The aim line shows where the shot or recall will go: orange for a shot, blue for
 
 ### Playing online (eduroam, managed machines)
 
-Put the server's **IP address** in **SERVER** and click **PLAY ONLINE**. Both players do this and meet in the **match lobby**. Nobody needs firewall changes or admin rights: both players only make outgoing connections to the server, over UDP when the network allows it and over HTTPS (port 443) when it doesn't. The HTTPS route checks the server against `assets/server.crt`, its certificate built into the game. Setting up the server on AWS EC2 is in [`server/README.md`](server/README.md).
+Put the server's **IP address** in **SERVER** and click **PLAY ONLINE**. Everyone does this and meets in the **match lobby**. Nobody needs firewall changes or admin rights: players only make outgoing connections to the server, over UDP when the network allows it and over HTTPS (port 443) when it doesn't. The HTTPS route checks the server against `assets/server.crt`, its certificate built into the game. Setting up the server on AWS EC2 is in [`server/README.md`](server/README.md).
 
 ### The match lobby
 
-Once two players are connected (on the LAN or online) they meet in the **match lobby** and see each other's names. **The host picks the roles** (choosing their own role gives the partner the other) **and whether time slows** while both stand still; the partner sees those choices greyed out. Both click **I'M READY** and the room starts. On the LAN the host is whoever clicked HOST A GAME; online, it's whoever joined the server first.
+Up to **4 players** meet in the **match lobby**, which has two columns: **NORMAL · FIRE** and **INVERTED · RECALL**. Newcomers join the smaller column; anyone can switch with **JOIN NORMAL** / **JOIN INVERTED**, and **the host can click any player to move them**. The game can't start until there's **at least one player in each column** and everyone has clicked **I'M READY**. Only the host sees the **match options** (whether time slows while everyone stands still). On the LAN the host is whoever clicked HOST A GAME; online, it's whoever joined the server first. Nobody can join a game that's already running.
 
-In game, **Esc → CHANGE ROLES** takes both players back to the match lobby. You return to **the same room**, and the attempt count doesn't go up for the trip (a death that just happened still counts). **LEAVE MATCH** goes back to the title screen; if you were hosting on the LAN, your game stays open for a new partner.
+In game, **Esc → CHANGE ROLES** takes everyone back to the match lobby. You return to **the same room**, and the attempt count doesn't go up for the trip (a wipe that just happened still counts). **LEAVE MATCH** goes back to the title screen. If someone leaves mid-game, the rest carry on as long as both roles are still covered (the gun drops where they stood); otherwise everyone goes back to the match lobby. A LAN host whose players all leave goes back to waiting for new ones.
 
-Both players must run the same build. If they don't (for example, the server wasn't updated), the game refuses the connection and says which versions it saw.
+Everyone must run the same build. If they don't (for example, the server wasn't updated), the game refuses the connection and says which versions it saw.
 
 ### Playing together on the same network
 
@@ -135,6 +135,7 @@ Pass these after `--`, for example `godot --path . -- --host`:
 | `--log` | Print gameplay events |
 | `--no-gl-fallback` | Don't switch to OpenGL on software rendering |
 | `--quit-after=SECONDS` | Exit after a while |
+| `--wait-players=N` | With `--bot`: ready up once N players are in the match lobby (default 2) |
 | `--swap-after=SECONDS` | With `--bot`: ask to change roles after a while, then take the other role (testing) |
 
 ## Testing
@@ -160,7 +161,7 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - Latency: each player owns **their own movement** and **the bullet they launch**, and decides **hits on themselves**, so nothing you do waits on the network. Only small events cross the wire. The room is rebuilt from a seed, and straight shots and gun throws are re-simulated locally and fast-forwarded by half the measured ping. State streams use unreliable channels separate from reliable events, and the network is polled right after each physics tick.
 - Memory and compute: the walls are one MultiMesh plus one static body, the floor is one shader-tiled plane, enemy bullets, debris and aim lines are pooled MultiMeshes, meshes and materials are shared, and idle systems switch off their per-frame processing.
 - Online play: `scripts/dual_server_peer.gd` lets the dedicated server accept UDP (ENet) and WebSocket players at the same time, and Godot's server relay passes messages between them. Clients try UDP for 2.5 s, then fall back to `wss://<server ip>:443`, trusting only the certificate in `assets/server.crt`. `server/` holds the EC2 setup script and guide.
-- `scripts/lan_discovery.gd`: LAN discovery. The host answers on UDP 7778 and broadcasts a beacon once a second until a partner joins. The lobby sends small queries to the broadcast addresses and directly to every address in its local /24 networks (about 200 a second); the answers are replies to its own packets, so they get through the joiner's firewall.
+- `scripts/lan_discovery.gd`: LAN discovery. The host answers on UDP 7778 and broadcasts a beacon once a second while its match lobby has room. The lobby sends small queries to the broadcast addresses and directly to every address in its local /24 networks (about 200 a second); the answers are replies to its own packets, so they get through the joiner's firewall.
 - `scripts/room_gen.gd`: deterministic procedural room: walls, waist-high crates, enemies kept away from the spawn, always fully connected.
 - Slow motion: `scripts/clock.gd` holds the world's speed. The host decides it (both players still = slow) and sends it with every enemy update; each player also speeds time up the instant they move. Enemies, bullets, enemy shots, thrown guns and debris scale their time by it; players, aiming and networking never do.
 - `scripts/bullet.gd`, `gun.gd`, `enemy.gd`, `player.gd`: gameplay objects.

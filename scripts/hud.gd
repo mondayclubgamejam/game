@@ -15,6 +15,7 @@ var targets := 0
 var attempt := 1
 var ping_ms := -1
 var markers: Array = []          ## [Vector2 pos, Color, String label, bool on_screen]
+var spectating := ""             ## while dead: the teammate being watched
 var slowmo := 0.0                ## 0 normal time .. 1 full slow motion
 
 var _banner_text := ""
@@ -77,7 +78,10 @@ func _draw() -> void:
 		_draw_marker(m[0], m[1], m[2], m[3], s)
 
 	# Crosshair: role colour when the gun will do something, white otherwise.
+	# None while spectating: there's nothing to aim.
 	var c := Vector2(w, h) * 0.5
+	if spectating != "":
+		c = Vector2(-1000, -1000)
 	var ch_col := role_col if can_act else Color.WHITE
 	draw_arc(c, 9.0 * s, 0, TAU, 24, Palette.INK, 5.0 * s)
 	draw_arc(c, 9.0 * s, 0, TAU, 24, ch_col, 2.0 * s)
@@ -97,12 +101,27 @@ func _draw() -> void:
 	_panel(Vector2(w - (tag.x + 24) * s, 24 * s), tag * s, role_col)
 	_text(role_name, Vector2(w - (tag.x - 6) * s, 58 * s), int(26 * s), Color.WHITE, int(7 * s))
 
+	if spectating != "":
+		_draw_spectating(w, h, s)
+
 	var hint := HINT if ping_ms < 0 else "%s     PING %d MS" % [HINT, ping_ms]
 	draw_string(font, Vector2(0, h - 10 * s), hint, HORIZONTAL_ALIGNMENT_RIGHT, w - 16 * s,
 		int(13 * s), Color(1, 1, 1, 0.8))
 
 	if _banner_x < 1.6:
 		_draw_banner(w, h, s)
+
+
+## While dead: whose eyes you're watching through.
+func _draw_spectating(w: float, h: float, s: float) -> void:
+	var text := "YOU'RE DOWN  ·  WATCHING %s" % spectating
+	var fs := int(30 * s)
+	var tw := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+	var size := Vector2(tw / s + 90, 74)
+	var pos := Vector2(w * 0.5 - size.x * 0.5 * s, h - 130 * s)
+	_panel(pos, size * s, Palette.DANGER)
+	_text(text, pos + Vector2(42, 40) * s, fs, Color.WHITE, int(7 * s))
+	_text("CLICK FOR THE NEXT TEAMMATE", pos + Vector2(46, 62) * s, int(15 * s), Palette.INK, 0)
 
 
 func _draw_slowmo(w: float, s: float) -> void:

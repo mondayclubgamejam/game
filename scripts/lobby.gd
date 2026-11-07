@@ -10,7 +10,8 @@ signal join_requested(address: String, port: int)
 signal cancel_requested
 signal online_requested(address: String)
 signal join_page(opened: bool)        ## the network scan only runs while this page is open
-signal role_chosen(role: int)
+signal role_chosen(role: int)        ## join a column
+signal move_requested(id: int, role: int)  ## host: move someone to a column
 signal ready_toggled(ready: bool)
 signal slowmo_toggled(on: bool)
 
@@ -21,6 +22,7 @@ const DEFAULT_PORT := 7777
 const PAPER := Color("f3e9d2")
 const SETTINGS := "user://settings.cfg"
 const READY_COLOR := Color("9bff3a")
+const MAX_PLAYERS := 4
 
 var _pages: Array[Control] = []
 var _menu: VBoxContainer
@@ -39,10 +41,9 @@ var _wait_sub_base := ""
 var _wait_addresses: Label
 var _wait_hint: Label
 var _party_info: Label
-var _slots: Array[PanelContainer] = []
-var _role_buttons: Array[Button] = []
-var _roles_heading: Label
-var _roles_row: HBoxContainer
+var _columns: Array[VBoxContainer] = []   ## player cards per role
+var _join_buttons: Array[Button] = []
+var _party_status: Label
 var _options_heading: Label
 var _leader := 0
 var _ready_button: Button
@@ -118,54 +119,87 @@ func show_busy(text: String, note := "") -> void:
 	_set_message(note, false)
 
 
-## The match lobby. `members`: [{id, name, role (0 forward / 1 reverse), ready}].
-## `info` says whether this is a new game or a return to the same room.
-## Only the host (`leader`) can change roles and options; the partner sees
-## them greyed out.
+## The match lobby. `members`: [{id, name, role (0 normal / 1 inverted), ready}].
+## Players pick a column; the host (`leader`) can also move anyone, and is
+## the only one who sees the match options.
 func show_party(members: Array, my_id: int, leader: int, info: String, slowmo: bool, note := "") -> void:
-	_leader = leader
-	var can_edit := my_id == leader
 	if not _party.visible:
 		_show_page(_party)
+	_leader = leader
+	var is_host := my_id == leader
 	_party_info.text = info
-	var mine: Dictionary = {}
+	var my_role := -1
+	var counts := [0, 0]
 	for m in members:
+		counts[m["role"]] += 1
 		if m["id"] == my_id:
-			mine = m
-	# My slot first, then my partner's (or an empty slot).
-	var ordered: Array = [mine] if not mine.is_empty() else []
-	for m in members:
-		if m["id"] != my_id:
-			ordered.append(m)
-	for i in _slots.size():
-		_fill_slot(_slots[i], ordered[i] if i < ordered.size() else {}, i == 0)
-	var my_role: int = mine.get("role", 0)
+			my_role = m["role"]
+			_my_ready = m["ready"]
 	for r in 2:
-		var picked := r == my_role
-		var style := _slanted(Palette.role_color(r) if picked else Palette.role_color(r).darkened(0.55),
-			6 if picked else 4, Color.WHITE if picked else Palette.INK)
-		_role_buttons[r].add_theme_stylebox_override("normal", style)
-		_role_buttons[r].add_theme_stylebox_override("disabled", style)
-		_role_buttons[r].disabled = not can_edit
-	_roles_heading.text = "PICK YOUR ROLE  ·  YOUR PARTNER GETS THE OTHER" if can_edit \
-		else "THE HOST PICKS ROLES AND OPTIONS"
+		for child in _columns[r].get_children():
+			child.queue_free()
+		for m in members:
+			if m["role"] == r:
+				_columns[r].add_child(_player_card(m, my_id, is_host))
+		_join_buttons[r].visible = my_role != r
+	if members.size() < 2:
+		_party_status.text = "WAITING FOR MORE PLAYERS  ·  %d / %d" % [members.size(), MAX_PLAYERS]
+		_party_status.add_theme_color_override("font_color", Palette.MUTED.lightened(0.5))
+	elif counts[0] == 0 or counts[1] == 0:
+		_party_status.text = "NEED AT LEAST ONE PLAYER ON EACH SIDE"
+		_party_status.add_theme_color_override("font_color", Palette.DANGER)
+	else:
+		_party_status.text = "%d / %d PLAYERS%s" % [members.size(), MAX_PLAYERS,
+			"  ·  CLICK A PLAYER TO MOVE THEM" if is_host else ""]
+		_party_status.add_theme_color_override("font_color", Palette.MUTED.lightened(0.5))
 	_slowmo_on = slowmo
-	_slowmo_button.text = "TIME SLOWS WHEN YOU BOTH STAND STILL:  " + ("ON" if slowmo else "OFF")
-	var slow_style := _slanted(Palette.MUTED.lightened(0.25) if slowmo
-		else Palette.MUTED.darkened(0.45), 6 if slowmo else 4, Color.WHITE if slowmo else Palette.INK)
-	_slowmo_button.add_theme_stylebox_override("normal", slow_style)
-	_slowmo_button.add_theme_stylebox_override("disabled", slow_style)
-	_slowmo_button.disabled = not can_edit
-	# Only the host sees the role picker and the match options.
-	_roles_row.visible = can_edit
-	_options_heading.visible = can_edit
-	_slowmo_button.visible = can_edit
-	_my_ready = mine.get("ready", false)
-	var full := members.size() >= 2
-	_ready_button.disabled = not full
-	_ready_button.text = "READY!" if _my_ready else ("I'M READY" if full else "WAITING FOR A PARTNER")
+	_slowmo_button.text = "TIME SLOWS WHEN EVERYONE STANDS STILL:  " + ("ON" if slowmo else "OFF")
+	_slowmo_button.add_theme_stylebox_override("normal", _slanted(Palette.MUTED.lightened(0.25) if slowmo
+		else Palette.MUTED.darkened(0.45), 6 if slowmo else 4, Color.WHITE if slowmo else Palette.INK))
+	_options_heading.visible = is_host
+	_slowmo_button.visible = is_host
+	var can_start: bool = members.size() >= 2 and counts[0] > 0 and counts[1] > 0
+	_ready_button.disabled = not can_start
+	_ready_button.text = "READY!" if _my_ready else ("I'M READY" if can_start else "WAITING")
 	_ready_button.add_theme_stylebox_override("normal", _slanted(READY_COLOR if _my_ready else Palette.MUTED))
 	_set_message(note, false)
+
+
+## A player in a column: name, then YOU / HOST / READY underneath. For the
+## host, other players' cards are buttons that move them to the other column.
+func _player_card(m: Dictionary, my_id: int, is_host: bool) -> Button:
+	var role: int = m["role"]
+	var tags := []
+	if m["id"] == my_id:
+		tags.append("YOU")
+	if m["id"] == _leader:
+		tags.append("HOST")
+	tags.append("READY" if m["ready"] else "NOT READY")
+	var b := Button.new()
+	b.custom_minimum_size.y = 50
+	b.focus_mode = Control.FOCUS_NONE
+	var style := _slanted(Palette.role_color(role), 4)
+	for state in ["normal", "disabled", "pressed"]:
+		b.add_theme_stylebox_override(state, style)
+	b.add_theme_stylebox_override("hover", _slanted(Palette.role_color(role).lightened(0.2), 4))
+	var box := VBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	box.offset_left = 22
+	box.offset_top = 2
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	box.add_theme_constant_override("separation", -6)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var name_label := _label(str(m["name"]), 20, Color.WHITE, 5, Vector2.ZERO)
+	name_label.clip_text = true
+	box.add_child(name_label)
+	box.add_child(_label("  ·  ".join(tags), 13, READY_COLOR.darkened(0.45) if m["ready"] else Palette.INK, 0, Vector2.ZERO))
+	b.add_child(box)
+	var movable: bool = is_host and m["id"] != my_id
+	b.disabled = not movable
+	if movable:
+		var id: int = m["id"]
+		b.pressed.connect(func(): move_requested.emit(id, 1 - role))
+	return b
 
 
 func is_in_party() -> bool:
@@ -341,34 +375,36 @@ func _build_wait() -> void:
 
 
 func _build_party() -> void:
-	_party.add_child(_label("MATCH LOBBY", 52, Palette.SIGNAL, 10, Vector2.ZERO))
+	_party.add_theme_constant_override("separation", 8)
+	_party.add_child(_label("MATCH LOBBY", 44, Palette.SIGNAL, 9, Vector2.ZERO))
 	_party_info = _heading("", Palette.MUTED.lightened(0.5))
 	_party.add_child(_party_info)
-	for i in 2:
-		var slot := PanelContainer.new()
-		slot.custom_minimum_size.y = 64
-		var box := VBoxContainer.new()
-		box.add_theme_constant_override("separation", -6)
-		slot.add_child(box)
-		box.add_child(_label("", 28, Color.WHITE, 7, Vector2.ZERO))
-		box.add_child(_label("", 16, Palette.INK, 0, Vector2.ZERO))
-		_party.add_child(slot)
-		_slots.append(slot)
 
-	_roles_heading = _heading("PICK YOUR ROLE", Palette.MUTED.lightened(0.5))
-	_party.add_child(_roles_heading)
-	var roles := HBoxContainer.new()
-	_roles_row = roles
-	roles.add_theme_constant_override("separation", 12)
-	_party.add_child(roles)
+	# Two columns: NORMAL and INVERTED.
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 14)
+	cols.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_party.add_child(cols)
 	for r in 2:
-		var b := _small_button("NORMAL · FIRE" if r == 0 else "INVERTED · RECALL", Palette.role_color(r),
+		var col := VBoxContainer.new()
+		col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		col.add_theme_constant_override("separation", 6)
+		cols.add_child(col)
+		var head := _label("NORMAL · FIRE" if r == 0 else "INVERTED · RECALL", 22, Palette.role_color(r), 6, Vector2.ZERO)
+		col.add_child(head)
+		var list := VBoxContainer.new()
+		list.add_theme_constant_override("separation", 6)
+		col.add_child(list)
+		_columns.append(list)
+		var join := _small_button("JOIN NORMAL" if r == 0 else "JOIN INVERTED", Palette.role_color(r).darkened(0.35),
 			func(): role_chosen.emit(r))
-		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		b.add_theme_font_size_override("font_size", 20)
-		roles.add_child(b)
-		_role_buttons.append(b)
+		join.custom_minimum_size.y = 38
+		join.add_theme_font_size_override("font_size", 18)
+		col.add_child(join)
+		_join_buttons.append(join)
 
+	_party_status = _heading("", Palette.MUTED.lightened(0.5))
+	_party.add_child(_party_status)
 	_options_heading = _heading("MATCH OPTIONS", Palette.MUTED.lightened(0.5))
 	_party.add_child(_options_heading)
 	_slowmo_button = _small_button("", Palette.MUTED, func(): slowmo_toggled.emit(not _slowmo_on))
@@ -376,9 +412,6 @@ func _build_party() -> void:
 	_slowmo_button.custom_minimum_size.y = 40
 	_party.add_child(_slowmo_button)
 
-	var fill := Control.new()
-	fill.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	_party.add_child(fill)
 	var bottom := HBoxContainer.new()
 	bottom.add_theme_constant_override("separation", 12)
 	_party.add_child(bottom)
@@ -390,22 +423,6 @@ func _build_party() -> void:
 	var leave := _small_button("LEAVE", Palette.DANGER, func(): cancel_requested.emit())
 	leave.custom_minimum_size = Vector2(130, 56)
 	bottom.add_child(leave)
-
-
-## A player's slot: name, role and whether they're ready.
-func _fill_slot(slot: PanelContainer, m: Dictionary, is_me: bool) -> void:
-	var name_label: Label = slot.get_child(0).get_child(0)
-	var info: Label = slot.get_child(0).get_child(1)
-	if m.is_empty():
-		slot.add_theme_stylebox_override("panel", _slanted(Palette.MUTED.darkened(0.3)))
-		name_label.text = "WAITING FOR A PARTNER..."
-		info.text = ""
-		return
-	var role: int = m["role"]
-	slot.add_theme_stylebox_override("panel", _slanted(Palette.role_color(role), 4))
-	name_label.text = str(m["name"]) + ("  (YOU)" if is_me else "") + ("  (HOST)" if m["id"] == _leader else "")
-	var role_text := "NORMAL · FIRES THE BULLET" if role == 0 else "INVERTED · RECALLS THE BULLET"
-	info.text = role_text + ("    ·  READY" if m["ready"] else "    ·  NOT READY")
 
 
 func _build_message_strip() -> void:

@@ -13,6 +13,7 @@ var _passed := 0
 func _initialize() -> void:
 	test_room_is_deterministic()
 	test_crates_are_placed_sensibly()
+	test_rooms_scale_with_players()
 	test_rooms_are_connected_and_populated()
 	test_different_seeds_differ()
 	test_merged_boxes_cover_exactly_the_walls()
@@ -45,12 +46,13 @@ func test_room_is_deterministic() -> void:
 func test_rooms_are_connected_and_populated() -> void:
 	for s in 300:
 		var r = RoomGen.generate(s * 7919 + 3)
-		check(r.reachable_count(r.spawn_a) == r.floor_count(), "seed %d fully connected" % s)
-		check(not r.is_solid(r.spawn_a) and not r.is_solid(r.spawn_b), "seed %d spawns free" % s)
+		check(r.reachable_count(r.spawns[0]) == r.floor_count(), "seed %d fully connected" % s)
+		for sp in r.spawns:
+			check(not r.is_solid(sp), "seed %d spawns free" % s)
 		check(r.enemy_cells.size() >= RoomGen.MIN_ENEMIES, "seed %d has >= %d enemies (got %d)"
 			% [s, RoomGen.MIN_ENEMIES, r.enemy_cells.size()])
 		check(r.enemy_cells.size() == r.enemy_kinds.size(), "seed %d kinds match cells" % s)
-		var mid := Vector2(r.spawn_a + r.spawn_b) * 0.5
+		var mid: Vector2 = r.spawn_center()
 		for c in r.enemy_cells:
 			check(not r.is_solid(c), "seed %d enemy on floor" % s)
 			check(Vector2(c).distance_to(mid) >= RoomGen.MIN_ENEMY_DIST, "seed %d enemy far from spawn" % s)
@@ -68,16 +70,16 @@ func test_merged_boxes_cover_exactly_the_walls() -> void:
 	for s in 50:
 		var r = RoomGen.generate(s)
 		var cover := PackedByteArray()
-		cover.resize(RoomGen.W * RoomGen.H)
+		cover.resize(r.cols * r.rows)
 		var overlap := false
 		for b: Rect2i in r.boxes:
 			for y in range(b.position.y, b.end.y):
 				for x in range(b.position.x, b.end.x):
-					if cover[y * RoomGen.W + x] == 1:
+					if cover[y * r.cols + x] == 1:
 						overlap = true
-					cover[y * RoomGen.W + x] = 1
+					cover[y * r.cols + x] = 1
 		var walls := PackedByteArray()
-		walls.resize(RoomGen.W * RoomGen.H)
+		walls.resize(r.cols * r.rows)
 		for i in walls.size():
 			walls[i] = 1 if r.solid[i] == RoomGen.WALL else 0
 		check(cover == walls, "seed %d boxes cover walls exactly" % s)
@@ -169,10 +171,40 @@ func test_crates_are_placed_sensibly() -> void:
 		var r = RoomGen.generate(s * 31 + 7)
 		total += r.crates.size()
 		for c: Vector2i in r.crates:
-			check(r.solid[c.y * RoomGen.W + c.x] == RoomGen.CRATE, "seed %d crate cell marked as crate" % s)
+			check(r.solid[c.y * r.cols + c.x] == RoomGen.CRATE, "seed %d crate cell marked as crate" % s)
 			check(c.y > RoomGen.SPAWN_ROWS, "seed %d crate off the spawn rows" % s)
 			check(not r.enemy_cells.has(c), "seed %d no enemy inside a crate" % s)
-		check(r.reachable_count(r.spawn_a) == r.floor_count(), "seed %d still connected with crates" % s)
+		check(r.reachable_count(r.spawns[0]) == r.floor_count(), "seed %d still connected with crates" % s)
 		if _failed > 0:
 			return
 	check(total > 200 * 4, "rooms get a fair number of crates (%d over 200 rooms)" % total)
+
+
+func test_rooms_scale_with_players() -> void:
+	var prev_area := 0
+	var prev_enemies := 0.0
+	for n in [2, 3, 4]:
+		var total_enemies := 0
+		var area := 0
+		for seed in 60:
+			var r = RoomGen.generate(seed * 13 + n, n)
+			area = r.cols * r.rows
+			total_enemies += r.enemy_cells.size()
+			check(r.spawns.size() == n, "%d players: one spawn each" % n)
+			var seen := {}
+			for sp in r.spawns:
+				check(not r.is_solid(sp), "%d players: spawn %s is free" % [n, sp])
+				check(not seen.has(sp), "%d players: spawns are distinct" % n)
+				seen[sp] = true
+			check(r.reachable_count(r.spawns[0]) == r.floor_count(), "%d players seed %d connected" % [n, seed])
+			check(r.solid.size() == r.cols * r.rows, "%d players: grid matches size" % n)
+			if _failed > 0:
+				return
+		var avg := float(total_enemies) / 60.0
+		check(area > prev_area, "%d players: bigger room (%d cells)" % [n, area])
+		check(avg > prev_enemies + 2.5, "%d players: more enemies (%.1f on average)" % [n, avg])
+		prev_area = area
+		prev_enemies = avg
+	var a = RoomGen.generate(99, 4)
+	var b = RoomGen.generate(99, 4)
+	check(a.solid == b.solid and a.enemy_cells == b.enemy_cells, "4-player rooms are deterministic too")

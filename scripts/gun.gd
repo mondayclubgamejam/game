@@ -76,6 +76,22 @@ func throw(from: Vector3, vel: Vector3, by: Node3D, fast_forward: float) -> void
 		t -= STEP
 
 
+## Drop to the floor (or a crate) where its holder fell or left. Anyone,
+## including whoever threw it last, may pick it up straight away.
+func drop_at(pos: Vector3) -> void:
+	state = GROUND
+	holder = null
+	thrower = null
+	_vel = Vector3.ZERO
+	since_land = 1.0
+	_query.from = pos + Vector3.UP * 1.0
+	_query.to = pos + Vector3.DOWN * 2.0
+	var hit := get_world_3d().direct_space_state.intersect_ray(_query)
+	global_position = (hit["position"] if not hit.is_empty() else Vector3(pos.x, 0.0, pos.z)) + Vector3.UP * 0.12
+	rotation = Vector3(0, rotation.y, PI / 2.0)
+	_refresh_visual()
+
+
 func set_loaded(value: bool) -> void:
 	loaded = value
 	_refresh_visual()
