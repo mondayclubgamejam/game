@@ -866,7 +866,7 @@ func start_round(seed_in: int, number: int, try_no: int, a_peer: int, b_peer: in
 	hand.player = local_player
 	hud.clear_banners()
 	hud.attempt = try_no
-	hud.banner("ROOM %d" % number if try_no == 1 else "ROOM %d  ·  TRY %d" % [number, try_no], Palette.SIGNAL)
+	hud.banner("ROOM %d" % number, Palette.SIGNAL)
 	if not _bot_mode:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
