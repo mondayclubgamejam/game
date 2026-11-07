@@ -42,6 +42,8 @@ var _party_info: Label
 var _slots: Array[PanelContainer] = []
 var _role_buttons: Array[Button] = []
 var _roles_heading: Label
+var _roles_row: HBoxContainer
+var _options_heading: Label
 var _leader := 0
 var _ready_button: Button
 var _my_ready := false
@@ -154,6 +156,10 @@ func show_party(members: Array, my_id: int, leader: int, info: String, slowmo: b
 	_slowmo_button.add_theme_stylebox_override("normal", slow_style)
 	_slowmo_button.add_theme_stylebox_override("disabled", slow_style)
 	_slowmo_button.disabled = not can_edit
+	# Only the host sees the role picker and the match options.
+	_roles_row.visible = can_edit
+	_options_heading.visible = can_edit
+	_slowmo_button.visible = can_edit
 	_my_ready = mine.get("ready", false)
 	var full := members.size() >= 2
 	_ready_button.disabled = not full
@@ -352,6 +358,7 @@ func _build_party() -> void:
 	_roles_heading = _heading("PICK YOUR ROLE", Palette.MUTED.lightened(0.5))
 	_party.add_child(_roles_heading)
 	var roles := HBoxContainer.new()
+	_roles_row = roles
 	roles.add_theme_constant_override("separation", 12)
 	_party.add_child(roles)
 	for r in 2:
@@ -362,7 +369,8 @@ func _build_party() -> void:
 		roles.add_child(b)
 		_role_buttons.append(b)
 
-	_party.add_child(_heading("MATCH OPTIONS", Palette.MUTED.lightened(0.5)))
+	_options_heading = _heading("MATCH OPTIONS", Palette.MUTED.lightened(0.5))
+	_party.add_child(_options_heading)
 	_slowmo_button = _small_button("", Palette.MUTED, func(): slowmo_toggled.emit(not _slowmo_on))
 	_slowmo_button.add_theme_font_size_override("font_size", 18)
 	_slowmo_button.custom_minimum_size.y = 40
