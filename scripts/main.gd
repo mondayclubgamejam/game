@@ -11,7 +11,9 @@ extends Node3D
 ## The "host" is either a player (LAN play) or a dedicated server started
 ## with --server, which plays nobody and relays between two clients. Players
 ## reach the server over UDP, or over a WebSocket on HTTPS (port 443) when
-## UDP is blocked.
+## UDP is blocked. Players connect by the server's IP address. The server
+## has its own certificate, and builds carry a copy of it (assets/server.crt),
+## so players verify they've reached the right server.
 
 const Palette := preload("res://scripts/palette.gd")
 const RoomGen := preload("res://scripts/room_gen.gd")
@@ -49,7 +51,9 @@ const MASK_WORLD := 1
 const MASK_ENEMY := 2
 const MASK_PLAYER := 4
 const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
-const WS_PORT := 8080          ## dedicated server's plain WebSocket port (behind HTTPS)
+const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
+const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
+const SERVER_NAME := "one-gun-one-bullet"       ## the name inside that certificate
 const UDP_TRY_SECONDS := 2.5   ## how long to try UDP before falling back to WebSocket
 const WS_TRY_SECONDS := 8.0
 
@@ -101,7 +105,6 @@ var _queue: Array[int] = []    ## server: connected players, in join order
 var _conn_stage := ""          ## client: "", "udp" or "ws" while connecting online
 var _conn_attempt := 0
 var _online_ws_url := ""
-var _ws_ca := ""             ## extra trusted CA file for wss (testing with a private CA)
 
 
 func _ready() -> void:
@@ -168,6 +171,7 @@ func _parse_args() -> void:
 	var port := Lobby.DEFAULT_PORT
 	var ws_port := WS_PORT
 	var ws_bind := "*"
+	var tls_dir := ""
 	var host := false
 	var server := false
 	var join := ""
@@ -183,8 +187,8 @@ func _parse_args() -> void:
 			ws_bind = arg.trim_prefix("--ws-bind=")
 		elif arg.begins_with("--online="):
 			online = arg.trim_prefix("--online=")
-		elif arg.begins_with("--ws-ca="):
-			_ws_ca = arg.trim_prefix("--ws-ca=")  # trust this CA too (testing with a private CA)
+		elif arg.begins_with("--tls-dir="):
+			tls_dir = arg.trim_prefix("--tls-dir=")  # server: where its key and certificate live
 		elif arg == "--join=lan":
 			_auto_join_lan = true  # join the first game found on the LAN
 		elif arg.begins_with("--join="):
@@ -209,7 +213,7 @@ func _parse_args() -> void:
 		elif arg.begins_with("--quit-after="):
 			get_tree().create_timer(arg.trim_prefix("--quit-after=").to_float()).timeout.connect(get_tree().quit)
 	if server:
-		_start_dedicated(port, ws_port, ws_bind)
+		_start_dedicated(port, ws_port, ws_bind, tls_dir)
 	elif host:
 		host_game(port)
 	elif join != "":
@@ -334,19 +338,50 @@ func _back_to_lobby(message: String, is_error := false) -> void:
 
 # --- Dedicated server -----------------------------------------------------------
 
-func _start_dedicated(udp_port: int, ws_port: int, ws_bind: String) -> void:
+## `tls_dir` holds the server's key and certificate (made there on first
+## run). Empty means an unencrypted WebSocket, for local testing only.
+func _start_dedicated(udp_port: int, ws_port: int, ws_bind: String, tls_dir: String) -> void:
 	_dedicated = true
 	_net_role = "server"
 	_log = true
 	Engine.max_fps = 120  # no rendering; just keep relays prompt without spinning
+	var tls: TLSOptions = null
+	if tls_dir != "":
+		tls = _server_tls(tls_dir)
+		if tls == null:
+			get_tree().quit(1)
+			return
 	var peer := DualServerPeer.new()
-	var err := peer.listen(udp_port, ws_port, ws_bind)
+	var err := peer.listen(udp_port, ws_port, ws_bind, tls)
 	if err != OK:
-		printerr("Couldn't start the server (error %d). Are UDP %d and TCP %d free?" % [err, udp_port, ws_port])
+		printerr("Couldn't start the server (error %d). Are UDP %d and TCP %d free (ports below 1024 need permission)?"
+			% [err, udp_port, ws_port])
 		get_tree().quit(1)
 		return
 	multiplayer.multiplayer_peer = peer
-	print("One Gun One Bullet server: UDP %d, WebSocket %s:%d. Waiting for players." % [udp_port, ws_bind, ws_port])
+	print("One Gun One Bullet server: UDP %d, %s on TCP %d. Waiting for players."
+		% [udp_port, "HTTPS WebSocket" if tls != null else "plain WebSocket (testing)", ws_port])
+
+
+## Loads the server's key and certificate from `dir`, making them the first
+## time. The certificate (not the key) is what goes into assets/server.crt.
+func _server_tls(dir: String) -> TLSOptions:
+	var key_path := dir.path_join("server.key")
+	var cert_path := dir.path_join("server.crt")
+	var key := CryptoKey.new()
+	var cert := X509Certificate.new()
+	var have := FileAccess.file_exists(key_path) and FileAccess.file_exists(cert_path)
+	if not have or key.load(key_path) != OK or cert.load(cert_path) != OK:
+		DirAccess.make_dir_recursive_absolute(dir)
+		var crypto := Crypto.new()
+		key = crypto.generate_rsa(2048)
+		cert = crypto.generate_self_signed_certificate(key, "CN=%s,O=One Gun One Bullet" % SERVER_NAME,
+			"20250101000000", "20450101000000")
+		if key.save(key_path) != OK or cert.save(cert_path) != OK:
+			printerr("Couldn't write the server key and certificate to ", dir)
+			return null
+		print("Made a new server certificate: ", cert_path)
+	return TLSOptions.server(key, cert)
 
 
 func _server_on_join(id: int) -> void:
@@ -399,7 +434,7 @@ func server_busy() -> void:
 
 # --- Joining a server online ---------------------------------------------------------
 
-## `address` is "host", "host:port", or a full ws:// / wss:// URL.
+## `address` is an IP (or host name), "ip:udp_port", or a full ws:// / wss:// URL.
 func join_online(address: String) -> void:
 	var text := address.strip_edges()
 	if text == "":
@@ -417,9 +452,7 @@ func join_online(address: String) -> void:
 	if text.count(":") == 1:
 		host = text.get_slice(":", 0)
 		port = text.get_slice(":", 1).to_int()
-	# A bare IP has no certificate, so its WebSocket is plain on WS_PORT;
-	# a domain name goes through HTTPS on 443.
-	_online_ws_url = "ws://%s:%d" % [host, WS_PORT] if host.is_valid_ip_address() else "wss://%s/" % host
+	_online_ws_url = "wss://%s:%d" % [host, WS_PORT]
 	_try_udp(host, port)
 
 
@@ -447,12 +480,12 @@ func _try_ws() -> void:
 	if multiplayer.multiplayer_peer != null:
 		multiplayer.multiplayer_peer.close()
 	var peer := WebSocketMultiplayerPeer.new()
-	# Normal certificate checks (Let's Encrypt is trusted out of the box).
 	var tls: TLSOptions = null
-	if _ws_ca != "":
-		var ca := X509Certificate.new()
-		if ca.load(_ws_ca) == OK:
-			tls = TLSOptions.client(ca)
+	if _online_ws_url.begins_with("wss://"):
+		tls = _pinned_tls()
+		if tls == null:
+			_back_to_lobby("This build has no server certificate (assets/server.crt), so it can't use the HTTPS route. See server/README.md.", true)
+			return
 	if peer.create_client(_online_ws_url, tls) != OK:
 		_online_failed()
 		return
@@ -463,6 +496,18 @@ func _try_ws() -> void:
 	get_tree().create_timer(WS_TRY_SECONDS).timeout.connect(func():
 		if attempt == _conn_attempt and _conn_stage == "ws":
 			_online_failed())
+
+
+## Trust exactly our server's certificate (checked in full, including its
+## name), rather than the usual certificate authorities: the server has an
+## IP address, not a domain, so no public authority could vouch for it.
+func _pinned_tls() -> TLSOptions:
+	if not FileAccess.file_exists(SERVER_CERT):
+		return null
+	var cert := X509Certificate.new()
+	if cert.load(SERVER_CERT) != OK:
+		return null
+	return TLSOptions.client(cert, SERVER_NAME)
 
 
 func _online_failed() -> void:

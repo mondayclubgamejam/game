@@ -167,7 +167,7 @@ func _build_panel() -> void:
 		Palette.SIGNAL, func():
 			_save_settings()
 			online_requested.emit(server_address())))
-	_server = _field("", "your-server.duckdns.org")
+	_server = _field("", "SERVER IP, E.G. 3.120.45.67")
 	_server.text_submitted.connect(func(_text: String):
 		_save_settings()
 		online_requested.emit(server_address()))

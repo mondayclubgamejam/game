@@ -19,7 +19,7 @@ Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs
 
 ### Playing online (eduroam, managed machines)
 
-Click **PLAY ONLINE** with the server's address in **SERVER**. Both players do this; the match starts when the second one connects. Nobody needs firewall changes or admin rights: both players only make outgoing connections to the server, over UDP when the network allows it and over HTTPS (port 443) when it doesn't. Setting up the server on AWS EC2 is in [`server/README.md`](server/README.md).
+Put the server's **IP address** in **SERVER** and click **PLAY ONLINE**. Both players do this; the match starts when the second one connects. Nobody needs firewall changes or admin rights: both players only make outgoing connections to the server, over UDP when the network allows it and over HTTPS (port 443) when it doesn't. The HTTPS route checks the server against `assets/server.crt`, its certificate built into the game. Setting up the server on AWS EC2 is in [`server/README.md`](server/README.md).
 
 ### Playing together on the same network
 
@@ -85,9 +85,8 @@ Pass these after `--`, for example `godot --path . -- --host`:
 |---|---|
 | `--host` / `--join=IP` / `--port=N` | Skip the lobby |
 | `--join=lan` | Join the first game found on the LAN |
-| `--online=ADDRESS` | Join through a server (`host`, `host:port`, or a `wss://` URL) |
-| `--server` | Run as the dedicated online server (use with `--headless`); `--ws-port=N` (default 8080) and `--ws-bind=ADDR` (default all; `127.0.0.1` behind Caddy) |
-| `--ws-ca=FILE` | Also trust this certificate authority for HTTPS (testing with a private CA) |
+| `--online=ADDRESS` | Join through a server (an IP, `ip:udp_port`, or a `wss://` / `ws://` URL) |
+| `--server` | Run as the dedicated online server (use with `--headless`). `--tls-dir=DIR` holds its key and certificate (made on first run; without it the WebSocket is unencrypted, for testing), `--ws-port=N` (default 443), `--ws-bind=ADDR` (default all) |
 | `--bot` | An autopilot plays your role (for testing) and logs events |
 | `--peaceful` | Host or server only: enemies chase but never attack |
 | `--shots=DIR` | With `--bot`: save a screenshot every 0.5 s plus a room overview |
@@ -117,7 +116,7 @@ Both processes print the same event timeline (fire, kill, throw, catch, recall, 
 - `scripts/main.gd`: entry point and the **only network router**. Every RPC lives here, so node paths always match on both machines, and moving to a central server later means changing who runs the host branches in this one file.
 - Latency: each player owns **their own movement** and **the bullet they launch**, and decides **hits on themselves**, so nothing you do waits on the network. Only small events cross the wire. The room is rebuilt from a seed, and straight shots and gun throws are re-simulated locally and fast-forwarded by half the measured ping. State streams use unreliable channels separate from reliable events, and the network is polled right after each physics tick.
 - Memory and compute: the walls are one MultiMesh plus one static body, the floor is one shader-tiled plane, enemy bullets, debris and aim lines are pooled MultiMeshes, meshes and materials are shared, and idle systems switch off their per-frame processing.
-- Online play: `scripts/dual_server_peer.gd` lets the dedicated server accept UDP (ENet) and WebSocket players at the same time, and Godot's server relay passes messages between them. Clients try UDP for 2.5 s, then fall back to `wss://<server>/` on 443. `server/` holds the EC2 setup script and guide.
+- Online play: `scripts/dual_server_peer.gd` lets the dedicated server accept UDP (ENet) and WebSocket players at the same time, and Godot's server relay passes messages between them. Clients try UDP for 2.5 s, then fall back to `wss://<server ip>:443`, trusting only the certificate in `assets/server.crt`. `server/` holds the EC2 setup script and guide.
 - `scripts/lan_discovery.gd`: LAN discovery. The host answers on UDP 7778 and broadcasts a beacon once a second until a partner joins. The lobby sends small queries to the broadcast addresses and directly to every address in its local /24 networks (about 200 a second); the answers are replies to its own packets, so they get through the joiner's firewall.
 - `scripts/room_gen.gd`: deterministic procedural room (always fully connected, enemies kept away from the spawn).
 - `scripts/bullet.gd`, `gun.gd`, `enemy.gd`, `player.gd`: gameplay objects.

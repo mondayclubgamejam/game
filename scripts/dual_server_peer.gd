@@ -20,15 +20,15 @@ var _refusing := false
 var _open := false
 
 
-## Starts both servers. `ws_bind` is "*" for every interface, or "127.0.0.1"
-## when a TLS proxy (Caddy) on the same machine forwards to it.
-func listen(udp_port: int, ws_port: int, ws_bind: String) -> Error:
+## Starts both servers. `ws_bind` is "*" for every interface. With `tls`, the
+## WebSocket is encrypted (wss://), which looks like ordinary HTTPS to networks.
+func listen(udp_port: int, ws_port: int, ws_bind: String, tls: TLSOptions = null) -> Error:
 	enet = ENetMultiplayerPeer.new()
 	var err := enet.create_server(udp_port, 8)
 	if err != OK:
 		return err
 	ws = WebSocketMultiplayerPeer.new()
-	err = ws.create_server(ws_port, ws_bind)
+	err = ws.create_server(ws_port, ws_bind, tls)
 	if err != OK:
 		enet.close()
 		return err
