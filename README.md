@@ -13,9 +13,18 @@ Design spec: [`docs/superpowers/specs/2026-11-07-tenet-coop-mvp-design.md`](docs
 
 ## Getting started
 
-1. Install Godot 4.7 (`brew install --cask godot` on macOS).
-2. Open Godot, choose **Import**, and select `project.godot` in this folder.
-3. Press **F5** to run.
+**To play, run one command.** Nothing needs installing first, not even Godot:
+
+| On | Run |
+|---|---|
+| Linux | `tools/play.sh` |
+| Windows | double-click `tools\play.bat` |
+
+It builds the game the first time (about 30 seconds; it fetches Godot by itself), and after that only when the code has changed, for example after a `git pull`. Then it starts the game.
+
+**To run the online server**, on the server: `tools/server.sh`. See [`server/README.md`](server/README.md).
+
+**To work on the game** in the editor: install Godot 4.7, choose **Import** and select `project.godot`, then press **F5**.
 
 ### Controls
 

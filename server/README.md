@@ -50,39 +50,44 @@ t2/t3.micro hours a month for 12 months. Every public IPv4 address (Elastic
 or not) costs about $3.60/month. Set up a **billing budget alert** (Billing →
 Budgets) and check the free-tier usage page after launching.
 
-## 2. Install the server
+## 2. Install the server: one command
 
-On your own machine, build the Linux executable and copy it and the setup
-script to the instance (`IP` is the instance's public or Elastic IP):
+Log in to the instance (`IP` is its public or Elastic IP), get the game's
+repository onto it, and run one script:
 
 ```sh
-tools/build.sh -target linux
-scp -i my-key.pem build/linux/SuperTenet.x86_64 server/setup.sh ubuntu@IP:
 ssh -i my-key.pem ubuntu@IP
+git clone <your repository URL> game && cd game
+tools/server.sh
 ```
 
-Then, on the instance:
+`tools/server.sh` does everything:
+
+- builds the Linux version of the game right there (it fetches Godot by
+  itself the first time; about 30 seconds),
+- installs it as a service that starts on boot and restarts if it stops
+  (it asks for `sudo`),
+- makes the server's key and certificate on first start, and
+- checks the repository's `assets/server.crt` against the server's
+  certificate. If they differ (a new server), it copies the right one in and
+  tells you to commit and push it, so players' builds trust this server.
+
+**Updating** the server later is the same command:
 
 ```sh
-sudo bash setup.sh ./SuperTenet.x86_64
+cd game && git pull && tools/server.sh
 ```
 
-That installs the game as a service that starts on boot and restarts if it
-stops, makes the server's key and certificate, and prints what to do next.
+The key and certificate are kept across updates.
 
-## 3. Put the server's certificate into the game
+(`server/setup.sh` is the install step on its own, if you'd rather build
+elsewhere and copy the executable over: `sudo bash setup.sh ./SuperTenet.x86_64`.)
 
-Back on your own machine, in the game folder:
+## 3. Players
 
-```sh
-scp -i my-key.pem ubuntu@IP:/opt/onegun/tls/server.crt assets/server.crt
-git add assets/server.crt && git commit -m "Add online server certificate"
-```
-
-Builds made after this can use the HTTPS route. (Builds without it still
-work over UDP, but can't fall back to HTTPS.) This is a one-time step: the
-certificate is valid for 20 years unless you delete `/opt/onegun/tls` on the
-server.
+Players run `tools/play.sh` (Linux) or `tools\play.bat` (Windows) from a
+copy of the repository that includes this server's `assets/server.crt`.
+Their game builds itself when needed and starts.
 
 ## 4. Play
 
@@ -99,8 +104,8 @@ online_server="3.120.45.67"
 
 ## Updating
 
-Copy the new executable over and run the setup script again; it replaces the
-game and restarts it. The key and certificate are kept.
+On the server: `cd game && git pull && tools/server.sh`. Players: `git pull`,
+then `tools/play.sh` / `tools\play.bat` rebuilds by itself.
 
 ## Checking on it
 

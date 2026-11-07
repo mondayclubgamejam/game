@@ -3,6 +3,9 @@
 //
 //	onegun-build                  build for the OS you're on
 //	onegun-build -target windows  or: linux, all
+//	onegun-build play [-- ARGS]   build for this OS if the code changed since
+//	                              the last build, then start the game (ARGS
+//	                              are passed to it)
 //
 // Outputs build/linux/SuperTenet.x86_64 and build/windows/SuperTenet.exe.
 //
@@ -66,19 +69,91 @@ func fail(format string, args ...any) {
 }
 
 func main() {
-	which := flag.String("target", "auto", "what to build: auto (this OS), linux, windows or all")
-	project := flag.String("project", "", "project folder (default: found from the current folder)")
-	flag.Parse()
+	mode := "build"
+	args := os.Args[1:]
+	if len(args) > 0 && (args[0] == "play" || args[0] == "build") {
+		mode, args = args[0], args[1:]
+	}
+	fs := flag.NewFlagSet("onegun-build", flag.ExitOnError)
+	which := fs.String("target", "auto", "what to build: auto (this OS), linux, windows or all")
+	project := fs.String("project", "", "project folder (default: found from the current folder)")
+	force := fs.Bool("force", false, "play: rebuild even if the build is up to date")
+	_ = fs.Parse(args)
 
 	root := *project
 	if root == "" {
 		root = findProject()
 	}
+
+	if mode == "play" {
+		play(root, *force, fs.Args())
+		return
+	}
 	names, err := pickTargets(*which)
 	if err != nil {
 		fail("%v", err)
 	}
+	build(root, names)
+}
 
+// play builds the game for this OS when the sources are newer than the
+// last build, then runs it with `gameArgs`.
+func play(root string, force bool, gameArgs []string) {
+	names, err := pickTargets("auto")
+	if err != nil {
+		fail("%v", err)
+	}
+	exe := filepath.Join(root, targets[names[0]].out)
+	if force || isStale(root, exe) {
+		build(root, names)
+	} else {
+		logf("Build is up to date: %s", targets[names[0]].out)
+	}
+	logf("Starting Super Tenet")
+	cmd := exec.Command(exe, gameArgs...)
+	cmd.Dir = filepath.Dir(exe)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			os.Exit(exitErr.ExitCode())
+		}
+		fail("couldn't start the game: %v", err)
+	}
+}
+
+// isStale reports whether any game source file is newer than `exe` (or
+// `exe` doesn't exist yet). Tooling, docs and build output don't count.
+func isStale(root, exe string) bool {
+	info, err := os.Stat(exe)
+	if err != nil {
+		return true
+	}
+	built := info.ModTime()
+	skip := map[string]bool{".godot": true, ".git": true, "build": true, "tools": true, "docs": true,
+		"game-style": true, "server": true, "tests": true}
+	stale := false
+	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil || stale {
+			return filepath.SkipDir
+		}
+		if d.IsDir() {
+			if path != root && skip[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if fi, err := d.Info(); err == nil && fi.ModTime().After(built) {
+			stale = true
+		}
+		return nil
+	})
+	return stale
+}
+
+// build exports the given targets with Godot (fetching Godot and the
+// export templates first if needed).
+func build(root string, names []string) {
 	godot, version, selfContained := findGodot()
 	logf("Using Godot %s at %s", version, godot)
 

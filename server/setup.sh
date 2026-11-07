@@ -15,6 +15,7 @@
 set -euo pipefail
 
 BINARY="${1:-}"
+FROM_SERVER_SH="${2:-}"   # tools/server.sh syncs the certificate itself
 if [ -z "$BINARY" ]; then
 	sed -n '2,14p' "$0"
 	exit 1
@@ -84,6 +85,11 @@ cat <<EOF
 Done. The server is $STATUS. Players enter this IP in the game's SERVER box:
 
     $IP
+EOF
+if [ -n "$FROM_SERVER_SH" ]; then
+	exit 0
+fi
+cat <<EOF
 
 Before building the copies players use, put this server's certificate into
 the game (it's public, so it's fine to commit). On your own machine, in the
