@@ -183,20 +183,34 @@ func test_crates_are_placed_sensibly() -> void:
 	check(total > 200 * 4, "rooms get a fair number of crates (%d over 200 rooms)" % total)
 
 
-## Endless: deeper rooms have more enemies, more gunmen and a faster pace,
-## all capped, and stay playable (connected, enemies spaced, away from spawn).
+## Endless: room 1 is easy, then enemies, gunmen and pace grow
+## exponentially up to their caps, and rooms stay playable (connected,
+## enemies spaced out and away from the spawn).
 func test_endless_ramps_up_with_caps() -> void:
-	check(RoomGen.pace_for(0) == 1.0 and RoomGen.extra_enemies(0) == 0, "level 0 is the normal room")
-	check(RoomGen.pace_for(40) == RoomGen.MAX_PACE, "pace is capped")
-	check(RoomGen.extra_enemies(40) == RoomGen.MAX_EXTRA_ENEMIES, "extra enemies are capped")
-	check(RoomGen.gunman_share(4, 99) <= 0.75, "gunman share stays below 3 in 4")
+	check(RoomGen.endless_enemies(2, 0) <= 4, "room 1 has only a few enemies")
+	check(RoomGen.endless_pace(0) < 0.8, "room 1 enemies are slow")
+	check(RoomGen.endless_gunmen(0) <= 0.1, "room 1 has hardly any gunmen")
+	check(RoomGen.endless_pace(99) == RoomGen.ENDLESS_MAX_PACE, "pace is capped")
+	check(RoomGen.endless_gunmen(99) == RoomGen.ENDLESS_MAX_GUNMEN, "gunman share is capped")
+	check(RoomGen.endless_enemies(4, 99) == RoomGen.ENDLESS_MAX_ENEMIES, "enemy count is capped")
+	# Exponential: each room's increase is at least as big as the one before.
+	for n in [2, 3, 4]:
+		var step := 0.0
+		for lvl in range(1, 7):
+			var grow := RoomGen.endless_enemies(n, lvl) - RoomGen.endless_enemies(n, lvl - 1)
+			check(grow >= step - 1.0 and grow >= 0, "%dp: enemies grow faster each room (level %d: +%d)" % [n, lvl, grow])
+			step = grow
+		var pace_step := 0.0
+		for lvl in range(1, 9):
+			var d := RoomGen.endless_pace(lvl) - RoomGen.endless_pace(lvl - 1)
+			check(d > pace_step - 0.0001, "pace grows faster each room (level %d)" % lvl)
+			pace_step = d
+	# A normal (Random) room is untouched by the Endless curve.
 	var plain = RoomGen.generate(4242, 2)
-	var level0 = RoomGen.generate(4242, 2, 0)
-	check(plain.solid == level0.solid and plain.enemy_cells == level0.enemy_cells, "difficulty 0 matches a normal room")
+	check(plain.level == -1 and plain.pace == 1.0 and plain.enemy_cells.size() >= RoomGen.MIN_ENEMIES, "normal rooms unchanged")
 	for n in [2, 3, 4]:
 		var prev := 0.0
-		var prev_gunmen := 0.0
-		for lvl in [0, 3, 6, 12, 30]:
+		for lvl in [0, 2, 4, 6, 8, 10, 14]:
 			var total := 0
 			var gunmen := 0
 			for seed in 30:
@@ -205,7 +219,7 @@ func test_endless_ramps_up_with_caps() -> void:
 				for k in r.enemy_kinds:
 					gunmen += 1 if k == RoomGen.Kind.GUNMAN else 0
 				check(r.reachable_count(r.spawns[0]) == r.floor_count(), "%dp level %d connected" % [n, lvl])
-				check(r.pace == RoomGen.pace_for(lvl), "%dp level %d pace set" % [n, lvl])
+				check(r.pace == RoomGen.endless_pace(lvl), "%dp level %d pace set" % [n, lvl])
 				for i in r.enemy_cells.size():
 					var c: Vector2i = r.enemy_cells[i]
 					check(Vector2(c).distance_to(r.spawn_center()) >= RoomGen.MIN_ENEMY_DIST, "%dp level %d enemy away from spawn" % [n, lvl])
@@ -215,13 +229,10 @@ func test_endless_ramps_up_with_caps() -> void:
 				if _failed > 0:
 					return
 			var avg := float(total) / 30.0
-			var share := float(gunmen) / maxf(total, 1)
-			print("  endless %dp level %2d: %.1f enemies, %.0f%% gunmen, pace %.2f" % [n, lvl, avg, share * 100.0, RoomGen.pace_for(lvl)])
-			if lvl > 0 and lvl <= 6:
-				check(avg > prev + 3.0, "%dp level %d: more enemies (%.1f vs %.1f)" % [n, lvl, avg, prev])
-				check(share > prev_gunmen - 0.05, "%dp level %d: gunman share holds or grows" % [n, lvl])
+			print("  endless %dp room %2d: %4.1f enemies, %2.0f%% gunmen, pace %.2f" % [n, lvl + 1, avg,
+				100.0 * gunmen / maxf(total, 1), RoomGen.endless_pace(lvl)])
+			check(avg >= prev - 0.5, "%dp room %d: not fewer enemies than before (%.1f)" % [n, lvl + 1, avg])
 			prev = avg
-			prev_gunmen = share
 
 
 ## The six hand-made maps: well formed, connected, fair at the start, and

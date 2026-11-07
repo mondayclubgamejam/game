@@ -17,17 +17,22 @@ const MIN_ENEMIES := 8
 const MAX_ENEMIES := 12
 const WALL := 1                ## full-height wall
 const CRATE := 2               ## waist-high crate: hides a crouching player, can be jumped on
-## Endless: each room deeper adds enemies, gunmen and pace, up to these caps.
-const LEVEL_ENEMIES := 2       ## extra enemies per level
-const MAX_EXTRA_ENEMIES := 14
-const LEVEL_GUNMEN := 0.025    ## extra gunman share per level
-const MAX_EXTRA_GUNMEN := 0.2
-const LEVEL_PACE := 0.05       ## enemies move and attack this much faster per level
-const MAX_PACE := 1.5
+## Endless starts easy and grows exponentially: every room multiplies the
+## enemy count, the share of gunmen and the enemy pace, up to these caps.
+const ENDLESS_START_ENEMIES := 3     ## room 1 with 2 players
+const ENDLESS_PER_PLAYER := 2        ## more at the start per player beyond two
+const ENDLESS_ENEMY_GROWTH := 1.3
+const ENDLESS_MAX_ENEMIES := 40      ## the spacing rule caps small rooms sooner
+const ENDLESS_START_GUNMEN := 0.1
+const ENDLESS_GUNMEN_GROWTH := 1.25
+const ENDLESS_MAX_GUNMEN := 0.7
+const ENDLESS_START_PACE := 0.75
+const ENDLESS_PACE_GROWTH := 1.06
+const ENDLESS_MAX_PACE := 1.8
 
 var seed_value := 0
 var players := 2
-var level := 0                  ## difficulty: 0 normally, Endless room - 1
+var level := -1                 ## Endless: room number - 1; -1 for a normal room
 var pace := 1.0                 ## enemy speed and attack-rate multiplier
 var cols := 18
 var rows := 14
@@ -39,12 +44,12 @@ var boxes: Array[Rect2i] = []   ## merged wall rectangles, in cells
 var crates: Array[Vector2i] = []
 
 
-## `player_count` (2-4) makes the room bigger and adds enemies; `difficulty`
-## (Endless: room number - 1) adds more, more gunmen and a faster pace.
-static func generate(seed_in: int, player_count := 2, difficulty := 0) -> RefCounted:
+## `player_count` (2-4) makes the room bigger and adds enemies. `endless_level`
+## (room number - 1) uses the Endless curve instead; -1 is a normal room.
+static func generate(seed_in: int, player_count := 2, endless_level := -1) -> RefCounted:
 	var room = new()
-	room.level = maxi(difficulty, 0)
-	room.pace = pace_for(room.level)
+	room.level = maxi(endless_level, -1)
+	room.pace = endless_pace(room.level) if room.level >= 0 else 1.0
 	room._build(seed_in, clampi(player_count, 2, MAX_PLAYERS))
 	return room
 
@@ -57,16 +62,17 @@ static func from_layout(lines: Array, player_count := 2, pace_in := 1.0) -> RefC
 	return room
 
 
-static func pace_for(lvl: int) -> float:
-	return minf(1.0 + LEVEL_PACE * maxi(lvl, 0), MAX_PACE)
+static func endless_enemies(player_count: int, lvl: int) -> int:
+	var start := ENDLESS_START_ENEMIES + ENDLESS_PER_PLAYER * (player_count - 2)
+	return mini(roundi(start * pow(ENDLESS_ENEMY_GROWTH, maxi(lvl, 0))), ENDLESS_MAX_ENEMIES)
 
 
-static func extra_enemies(lvl: int) -> int:
-	return mini(LEVEL_ENEMIES * maxi(lvl, 0), MAX_EXTRA_ENEMIES)
+static func endless_gunmen(lvl: int) -> float:
+	return minf(ENDLESS_START_GUNMEN * pow(ENDLESS_GUNMEN_GROWTH, maxi(lvl, 0)), ENDLESS_MAX_GUNMEN)
 
 
-static func gunman_share(player_count: int, lvl: int) -> float:
-	return 0.4 + 0.05 * (player_count - 2) + minf(LEVEL_GUNMEN * maxi(lvl, 0), MAX_EXTRA_GUNMEN)
+static func endless_pace(lvl: int) -> float:
+	return minf(ENDLESS_START_PACE * pow(ENDLESS_PACE_GROWTH, maxi(lvl, 0)), ENDLESS_MAX_PACE)
 
 
 ## Average of the spawn cells.
@@ -260,10 +266,13 @@ func _random_piece(rng: RandomNumberGenerator) -> Array[Vector2i]:
 
 
 func _place_enemies(rng: RandomNumberGenerator) -> void:
-	# Four more enemies per player beyond two, with a few more gunmen; more
-	# still the deeper an Endless run goes. Spacing below keeps it from jamming.
-	var wanted := rng.randi_range(MIN_ENEMIES, MAX_ENEMIES) + 4 * (players - 2) + extra_enemies(level)
-	var share := gunman_share(players, level)
+	# Four more enemies per player beyond two, with a few more gunmen. Endless
+	# follows its own curve. Spacing below keeps rooms from jamming.
+	var wanted := rng.randi_range(MIN_ENEMIES, MAX_ENEMIES) + 4 * (players - 2)
+	var share := 0.4 + 0.05 * (players - 2)
+	if level >= 0:
+		wanted = endless_enemies(players, level)
+		share = endless_gunmen(level)
 	var spawn_mid := spawn_center()
 	var candidates: Array[Vector2i] = []
 	for y in rows:

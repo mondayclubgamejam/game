@@ -58,7 +58,7 @@ const KILL_WORDS := ["", "KILL!", "DOUBLE!", "TRIPLE!", "QUAD!"]
 ## Network protocol version. Bump it whenever an RPC's arguments change, so
 ## mismatched builds refuse each other with a clear message instead of
 ## failing on individual RPCs.
-const PROTOCOL := 11
+const PROTOCOL := 12
 const MAX_PLAYERS := 4
 const WS_PORT := 443           ## dedicated server's encrypted WebSocket (HTTPS) port
 const SERVER_CERT := "res://assets/server.crt"  ## the server certificate players trust
@@ -979,9 +979,9 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
-## How much harder than usual a room is: Endless ramps up room by room.
+## Endless rooms follow the Endless curve (room 1 = level 0); others are normal (-1).
 static func _difficulty(mode: String, number: int) -> int:
-	return number - 1 if mode == "endless" else 0
+	return number - 1 if mode == "endless" else -1
 
 
 func _clear_round() -> void:
