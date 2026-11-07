@@ -185,8 +185,8 @@ func _build_title() -> void:
 	word.add_child(_label("ET", 124, Palette.REVERSE, 16, Vector2.ZERO))
 	title.add_child(word)
 	title.add_child(_label("TWO PLAYERS.  ONE BULLET.  TIME RUNS BOTH WAYS.", 22, Color.WHITE, 6, Vector2(48, 300)))
-	title.add_child(_label("FORWARD  ·  FIRE", 26, Palette.FORWARD, 7, Vector2(48, 344)))
-	title.add_child(_label("REVERSE  ·  RECALL", 26, Palette.REVERSE, 7, Vector2(260, 344)))
+	title.add_child(_label("NORMAL  ·  FIRE", 26, Palette.FORWARD, 7, Vector2(48, 344)))
+	title.add_child(_label("INVERTED  ·  RECALL", 26, Palette.REVERSE, 7, Vector2(240, 344)))
 
 
 func _build_panel() -> void:
@@ -340,7 +340,7 @@ func _build_party() -> void:
 	roles.add_theme_constant_override("separation", 12)
 	_party.add_child(roles)
 	for r in 2:
-		var b := _small_button("FORWARD · FIRE" if r == 0 else "REVERSE · RECALL", Palette.role_color(r),
+		var b := _small_button("NORMAL · FIRE" if r == 0 else "INVERTED · RECALL", Palette.role_color(r),
 			func(): role_chosen.emit(r))
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		b.add_theme_font_size_override("font_size", 20)
@@ -381,7 +381,7 @@ func _fill_slot(slot: PanelContainer, m: Dictionary, is_me: bool) -> void:
 	var role: int = m["role"]
 	slot.add_theme_stylebox_override("panel", _slanted(Palette.role_color(role), 4))
 	name_label.text = str(m["name"]) + ("  (YOU)" if is_me else "")
-	var role_text := "FORWARD · FIRES THE BULLET" if role == 0 else "REVERSE · RECALLS THE BULLET"
+	var role_text := "NORMAL · FIRES THE BULLET" if role == 0 else "INVERTED · RECALLS THE BULLET"
 	info.text = role_text + ("    ·  READY" if m["ready"] else "    ·  NOT READY")
 
 

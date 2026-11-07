@@ -1479,7 +1479,7 @@ func _ray_world(a: Vector3, b: Vector3) -> Variant:
 func _update_markers() -> void:
 	hud.markers.clear()
 	if partner != null:
-		var label := "A" if partner.role == ROLE_FORWARD else "B"
+		var label := "NORMAL" if partner.role == ROLE_FORWARD else "INVERTED"
 		if partner.carrying:
 			label += "  ·  GUN"
 		_add_marker(partner.global_position + Vector3(0, 2.4, 0), Palette.role_color(partner.role), label)
@@ -1506,7 +1506,7 @@ func _add_marker(world: Vector3, col: Color, label: String) -> void:
 # --- Misc -------------------------------------------------------------------------------------
 
 func _role_name(p: Node3D) -> String:
-	return "A" if p.role == ROLE_FORWARD else "B"
+	return "normal" if p.role == ROLE_FORWARD else "inverted"
 
 
 func _log_event(msg: String) -> void:

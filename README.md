@@ -4,8 +4,10 @@ Monday Club game jam project, built with [Godot 4.7](https://godotengine.org/).
 
 A two-player online co-op shooter about time direction. Two players share **one gun with one bullet**:
 
-- **Player A (forward, the host)** can only **fire**. The bullet passes through every enemy in its path and sticks in the first wall.
-- **Player B (reverse, the joiner)** can only **recall**. The bullet rips out of wherever it stuck and curves back into B's gun, killing everything on the way. A recall can't pass through walls: it sticks in any wall in the way, and B has to find a clear angle.
+- The **normal** player can only **fire**. The bullet passes through every enemy in its path and sticks in the first wall.
+- The **inverted** player can only **recall**. The bullet rips out of wherever it stuck and curves back into their gun, killing everything on the way. A recall can't pass through walls: it sticks in any wall in the way, and the inverted player has to find a clear angle.
+
+Players pick who's normal and who's inverted in the match lobby.
 
 So you must **throw the gun to each other** after every shot and every recall. Carrying the gun slows you down. Friendly fire is on, enemies die in one hit and so do you, and if either player dies the room restarts. Clear every enemy to get a new procedurally generated room.
 
@@ -34,7 +36,7 @@ It builds the game the first time (about 30 seconds; it fetches Godot by itself)
 | Space | Jump (high enough to get onto a crate) |
 | Ctrl / C | Crouch: shorter and slower, so a crate hides you from gunmen |
 | Mouse | Look and aim |
-| Left click / F | Fire (A) or recall (B) |
+| Left click / F | Fire (normal) or recall (inverted) |
 | Right click / Q | Throw the gun (aims itself at your partner when they're near the crosshair) |
 | Walk into the gun | Catch it in the air or pick it up off the floor |
 | R | Restart the room |
