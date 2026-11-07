@@ -34,12 +34,12 @@ sudo ufw allow 7777:7778/udp
 ## Building a Linux executable
 
 ```sh
-tools/build_linux.sh            # or: GODOT=/path/to/godot tools/build_linux.sh
+tools/build_linux.sh
 ```
 
-This produces **`build/linux/OneGunOneBullet.x86_64`**, a single self-contained file (about 70 MB) with the game packed inside. Testers need nothing else: copy it over, `chmod +x` it if needed, and run it.
+This produces **`build/linux/OneGunOneBullet.x86_64`**, a single self-contained file (about 70 MB) with the game packed inside. **Running it needs nothing else, not even Godot**: copy it over, `chmod +x` it if needed, and run it.
 
-The first build installs Godot's Linux export template. The official template download is a 1.3 GB bundle for every platform, so `tools/fetch_linux_template.py` reads it remotely and pulls out just the Linux files (about 35 MB downloaded).
+Building only needs `python3`. The script uses Godot 4.7 from `$GODOT` or your PATH if you have it; otherwise it downloads the official Godot 4.7.2 into `~/.cache/one-gun-one-bullet` once. It also installs Godot's Linux export template: the official download is a 1.3 GB bundle for every platform, so `tools/fetch_linux_template.py` reads it remotely and pulls out just the Linux files (about 35 MB). A first build from a fresh clone takes about 30 seconds.
 
 ### Controls
 
