@@ -19,6 +19,9 @@ signal slowmo_toggled(on: bool)
 const Palette := preload("res://scripts/palette.gd")
 const TitleFont := preload("res://assets/fonts/Anton-Regular.ttf")
 const BgShader := preload("res://shaders/menu_bg.gdshader")
+const TileShader := preload("res://shaders/map_tile.gdshader")
+const MAP_PICTURES := "res://assets/maps/%s.png"   ## made by tools/map_previews.gd
+const TILE_INSET := 6.0       ## the picture sits inside the tile's border
 const DEFAULT_PORT := 7777
 const PAPER := Color("f3e9d2")
 const SETTINGS := "user://settings.cfg"
@@ -117,6 +120,8 @@ var _leader := 0
 var _title_node: Control
 var _maps_node: Control
 var _map_tiles: Array[Button] = []
+var _map_subs: Array[Label] = []
+var _map_pics: Array[ShaderMaterial] = []   ## null where a map has no picture
 var _host_label: Label
 var _ready_button: Button
 var _my_ready := false
@@ -370,18 +375,43 @@ func _build_maps() -> void:
 		b.position = Vector2(GRID_LEFT + col * (tile.x + GRID_GAP) + shift, y)
 		b.size = tile
 		b.focus_mode = Control.FOCUS_NONE
+		# The map's picture fills the tile, cut to its slant; the name sits on top.
+		var pic_mat: ShaderMaterial = null
+		var path := MAP_PICTURES % m["id"]
+		if m["id"] != "" and ResourceLoader.exists(path):
+			var pic := TextureRect.new()
+			pic.texture = load(path)
+			pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+			pic.stretch_mode = TextureRect.STRETCH_SCALE
+			pic.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+			pic.offset_left = TILE_INSET
+			pic.offset_top = TILE_INSET
+			pic.offset_right = -TILE_INSET
+			pic.offset_bottom = -TILE_INSET
+			pic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			pic_mat = ShaderMaterial.new()
+			pic_mat.shader = TileShader
+			pic_mat.set_shader_parameter("slant", PANEL_SKEW * (tile.y - 2.0 * TILE_INSET) / (tile.x - 2.0 * TILE_INSET))
+			pic.material = pic_mat
+			b.add_child(pic)
+			var mat := pic_mat
+			b.mouse_entered.connect(func(): mat.set_shader_parameter("light", 0.0 if b.disabled else 1.0))
+			b.mouse_exited.connect(func(): mat.set_shader_parameter("light", 0.0))
+		_map_pics.append(pic_mat)
 		var box := VBoxContainer.new()
 		box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		box.offset_left = 22
+		box.offset_left = 24
 		box.offset_right = -12
-		box.alignment = BoxContainer.ALIGNMENT_CENTER
+		box.offset_top = 10
+		box.alignment = BoxContainer.ALIGNMENT_BEGIN
 		box.add_theme_constant_override("separation", 0)
 		box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var title := str(m["name"])
 		box.add_child(_label(title, 30 if title.length() <= 10 else 22, Color.WHITE, 7, Vector2.ZERO))
-		var sub := _label("", 13, Palette.INK, 0, Vector2.ZERO)
+		var sub := _label("", 14, PAPER, 4, Vector2.ZERO)
 		sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(sub)
+		_map_subs.append(sub)
 		b.add_child(box)
 		var id: String = m["id"]
 		b.pressed.connect(func(): map_chosen.emit(id))
@@ -395,7 +425,7 @@ func _show_maps(selected: String, is_host: bool, players: int) -> void:
 	for i in MAPS.size():
 		var m: Dictionary = MAPS[i]
 		var b := _map_tiles[i]
-		var sub: Label = b.get_child(0).get_child(1)
+		var sub := _map_subs[i]
 		var picked: bool = m["id"] == selected and m["id"] != ""
 		var fill: Color
 		sub.text = m["sub"]
@@ -423,6 +453,10 @@ func _show_maps(selected: String, is_host: bool, players: int) -> void:
 		b.add_theme_stylebox_override("hover", _slanted(fill.lightened(0.15), 6 if picked else 4,
 			Color.WHITE if picked else Palette.INK, PANEL_SKEW))
 		b.disabled = not (is_host and m["ready"]) or picked
+		var pic := _map_pics[i]
+		if pic != null:
+			pic.set_shader_parameter("fill", fill)
+			pic.set_shader_parameter("dim", 0.0 if picked else (0.25 if m["ready"] else 0.7))
 
 
 func _build_panel() -> void:
