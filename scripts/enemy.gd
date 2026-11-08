@@ -20,11 +20,12 @@ const REACTION := 0.45         ## pause after first spotting someone
 const BODY_RADIUS := 0.4       ## matches the collision capsule
 const CRATE_SIZE := 1.7        ## matches room_builder.gd
 
-const SPEEDS := [2.4, 4.0, 3.45]         ## by kind: gunman, sword, knives (m/s)
+const SPEEDS := [2.4, 4.0, 3.45]         ## by kind: gunman, sword, fists (m/s)
 const WINDUPS := [0.7, 0.3, 0.4]
 const COOLDOWNS := [3.8, 0.8, 0.7]       ## gunmen reload slowly
 const COOLDOWN_JITTER := [1.4, 0.4, 0.4]
-const EnemyRig := preload("res://scripts/enemy_rig.gd")
+## Resting arm angle by kind: pistol level, sword raised, fists up.
+const ARM_REST := [0.0, 0.9, 0.25]
 
 static var _meshes := {}
 
@@ -56,8 +57,9 @@ var _net_vel := Vector3.ZERO
 var _net_age := 0.0
 
 # Visuals.
-var _rig: EnemyRig
-var _last_pos := Vector3.ZERO
+var _body_mi: MeshInstance3D
+var _head_mi: MeshInstance3D
+var _arm: Node3D
 var _aim_line: MeshInstance3D
 var _aim_target: Node3D = null
 var _flash := 0.0
@@ -66,9 +68,6 @@ var _flash := 0.0
 func _ready() -> void:
 	collision_layer = LAYER_ENEMY
 	collision_mask = MASK_WORLD
-	# Enemies never leave the floor: skip floor detection and keep slides few.
-	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
-	max_slides = 2
 	_query.collision_mask = MASK_WORLD
 	_think = id * 0.037  # spread brain work across frames
 	_sep_tick = id % 3
@@ -81,42 +80,49 @@ func _ready() -> void:
 	add_child(shape)
 	_build_visuals()
 	_net_pos = global_position
-	_last_pos = global_position
 	set_process(false)
 	_cooldown = SPAWN_GRACE + id * 0.12
 
 
-## Body, weapons and animation live in the rig (scripts/enemy_rig.gd); the
-## gunman's laser aim line lives here.
+## Each kind has its own silhouette and colour so they read at a glance:
+## a held-out pistol, a raised long sword, or big fists, plus a coloured belt.
 func _build_visuals() -> void:
-	_rig = EnemyRig.new()
-	add_child(_rig)
-	_rig.setup(kind, _skin(), Palette.KIND_COLORS[kind], fmod(id * 0.618, 1.0))
-	if kind == RoomGen.Kind.GUNMAN:
-		_aim_line = MeshInstance3D.new()
-		_aim_line.mesh = _get_mesh("unit")
-		_aim_line.material_override = Palette.glow(Palette.DANGER, 3.0)
-		_aim_line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_aim_line.top_level = true
-		_aim_line.visible = false
-		add_child(_aim_line)
+	var accent: Color = Palette.KIND_COLORS[kind]
+	_body_mi = _mesh_part("body", Vector3(0, 0.8, 0), Palette.toon(_skin()), self)
+	_head_mi = _mesh_part("head", Vector3(0, 1.88, 0), Palette.toon(_skin()), self)
+	_mesh_part("visor", Vector3(0, 1.9, -0.22), Palette.toon(Palette.INK), self)
+	_mesh_part("belt", Vector3(0, 0.95, 0), Palette.toon(accent), self)
+	_arm = Node3D.new()
+	_arm.position = Vector3(0.42, 1.15, -0.25)
+	_arm.rotation.x = ARM_REST[kind]
+	add_child(_arm)
+	match kind:
+		RoomGen.Kind.GUNMAN:
+			_mesh_part("pistol", Vector3(0, 0, -0.26), Palette.toon(Palette.STEEL), _arm)
+			_mesh_part("muzzle", Vector3(0, 0.02, -0.56), Palette.toon(accent), _arm)
+			_aim_line = MeshInstance3D.new()
+			_aim_line.mesh = _get_mesh("unit")
+			_aim_line.material_override = Palette.glow(Palette.DANGER, 3.0)
+			_aim_line.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			_aim_line.top_level = true
+			_aim_line.visible = false
+			add_child(_aim_line)
+		RoomGen.Kind.KNIFE:
+			_mesh_part("grip", Vector3(0, 0, 0), Palette.toon(Palette.INK), _arm)
+			_mesh_part("guard", Vector3(0, 0, -0.13), Palette.toon(Palette.STEEL), _arm)
+			_mesh_part("blade", Vector3(0, 0, -0.72), Palette.toon(accent), _arm)
+		RoomGen.Kind.FISTS:
+			_mesh_part("fist", Vector3(0, 0, -0.18), Palette.toon(accent), _arm)
+			_mesh_part("fist", Vector3(-0.84, 0, -0.18), Palette.toon(accent), _arm)
 
 
-## Where a gunman points: the player it's winding up on, else the nearest
-## one in range (null: keep the gun low).
-func _aim_point() -> Variant:
-	if kind != RoomGen.Kind.GUNMAN or game == null:
-		return null
-	if _flash > 0.0 and _aim_target != null and is_instance_valid(_aim_target):
-		return _aim_target.chest_pos()
-	var best: Variant = null
-	var best_d := GUN_RANGE
-	for p in game.living_players():
-		var d: float = global_position.distance_to(p.global_position)
-		if d < best_d:
-			best_d = d
-			best = p.chest_pos()
-	return best
+func _mesh_part(key: String, pos: Vector3, mat: Material, parent: Node3D) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = _get_mesh(key)
+	mi.position = pos
+	mi.material_override = mat
+	parent.add_child(mi)
+	return mi
 
 
 ## Meshes are shared by every enemy.
@@ -187,7 +193,9 @@ static func _get_mesh(key: String) -> Mesh:
 
 func set_targeted(on: bool) -> void:
 	if alive:
-		_rig.set_tint(Palette.toon(Palette.TARGET) if on else null)
+		var mat := Palette.toon(Palette.TARGET if on else _skin())
+		_body_mi.material_override = mat
+		_head_mi.material_override = mat
 
 
 ## Dummies look like wooden practice targets.
@@ -205,22 +213,14 @@ func set_active(on: bool) -> void:
 		_cooldown = maxf(_cooldown, SPAWN_GRACE)
 
 
-## `hit_dir`: which way the killing bullet travelled (zero: just vanish,
-## e.g. a tutorial target that was beaten before a restart).
-func die(hit_dir := Vector3.ZERO) -> void:
+func die() -> void:
 	if not alive:
 		return
 	alive = false
 	collision_layer = 0
+	visible = false
 	set_physics_process(false)
 	set_process(false)
-	if _aim_line != null:
-		_aim_line.visible = false
-	if hit_dir == Vector3.ZERO or _rig == null:
-		visible = false
-		return
-	# The body is knocked over away from the shot, then shrinks away.
-	_rig.fall(hit_dir)
 
 
 func alert() -> void:
@@ -228,7 +228,7 @@ func alert() -> void:
 
 
 func muzzle_pos() -> Vector3:
-	return _rig.muzzle_pos()
+	return _arm.global_position + -global_basis.z * 0.4
 
 
 # --- Network smoothing (clients) ----------------------------------------------
@@ -246,6 +246,9 @@ func _process(delta: float) -> void:
 	# Telegraph visuals run on every peer.
 	if _flash > 0.0:
 		_flash = maxf(_flash - delta * Clock.scale, 0.0)
+		if kind != RoomGen.Kind.GUNMAN:
+			# Wind up: pull the weapon back and up.
+			_arm.rotation.x = ARM_REST[kind] + 0.8 * minf(_flash * 4.0, 1.0)
 	if _aim_line != null and _aim_line.visible:
 		if _aim_target == null or not is_instance_valid(_aim_target) or _flash <= 0.0:
 			_aim_line.visible = false
@@ -258,8 +261,9 @@ func _process(delta: float) -> void:
 ## Wind-up telegraph. `target` may be null.
 func show_windup(target: Node3D, seconds: float) -> void:
 	_flash = seconds
-	_rig.set_tint(Palette.toon(Color.WHITE))
-	_rig.windup(seconds)
+	var mat := Palette.toon(Color.WHITE)
+	_body_mi.material_override = mat
+	_head_mi.material_override = mat
 	if _aim_line != null and target != null:
 		_aim_target = target
 		_aim_line.visible = true
@@ -268,7 +272,14 @@ func show_windup(target: Node3D, seconds: float) -> void:
 
 func show_strike() -> void:
 	_flash = 0.0
-	_rig.strike()
+	var rest: float = ARM_REST[kind]
+	if kind != RoomGen.Kind.GUNMAN:
+		# Swing through, then settle back.
+		var tw := create_tween()
+		tw.tween_property(_arm, "rotation:x", rest - 1.5, 0.08)
+		tw.tween_property(_arm, "rotation:x", rest, 0.3).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	else:
+		_arm.rotation.x = rest
 	if _aim_line:
 		_aim_line.visible = false
 	set_targeted(false)
@@ -289,9 +300,6 @@ func _draw_line(a: Vector3, b: Vector3) -> void:
 func _physics_process(delta: float) -> void:
 	if not alive:
 		return
-	var moved := global_position - _last_pos
-	_last_pos = global_position
-	_rig.animate(delta, Vector2(moved.x, moved.z).length() / maxf(delta, 0.001), _aim_point())
 	if not multiplayer.is_server():
 		_net_age += delta
 		var predicted := _net_pos + _net_vel * minf(_net_age, 0.15)
@@ -343,7 +351,7 @@ func _brain(real_delta: float) -> void:
 	wish *= Clock.scale
 	if wish.length_squared() < 0.0001:
 		velocity = Vector3.ZERO
-		return  # standing still: no need to run the physics move
+		return  # standing still: no need to move
 	velocity = Vector3(wish.x, 0.0, wish.z)
 	_move(velocity * real_delta)
 

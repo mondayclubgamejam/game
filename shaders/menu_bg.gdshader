@@ -1,7 +1,6 @@
-// Title screen overlay on top of the live 3D scene (menu_stage.gd): forward
-// time (orange) and reverse time (blue) split by a slanted ink band. Stripes
-// in each half drift in opposite directions, under a halftone screen; the
-// scene shows through the middle and the edges darken so the text reads.
+// Title screen background: forward time (orange) and reverse time (blue)
+// split by a slanted ink band. Stripes in each half drift in opposite
+// directions, under a halftone screen. One ColorRect, no textures.
 shader_type canvas_item;
 
 uniform vec4 forward_col : source_color = vec4(1.0, 0.478, 0.102, 1.0);
@@ -11,7 +10,6 @@ uniform vec4 deep : source_color = vec4(0.165, 0.078, 0.275, 1.0);
 uniform float split = 0.47;      // where the band crosses the middle, 0..1 of width
 uniform float slant = 0.32;      // band tilt
 uniform float speed = 0.05;
-uniform float see_through = 0.8;    // how much of the 3D scene shows through
 
 void fragment() {
 	vec2 res = 1.0 / SCREEN_PIXEL_SIZE;
@@ -47,10 +45,5 @@ void fragment() {
 	col = mix(col, ink.rgb, 1.0 - smoothstep(0.035, 0.04, w));
 	col = mix(col, vec3(1.0), (1.0 - smoothstep(0.004, 0.007, w)) * 0.9);
 
-	// Let the scene through, most of all in the middle, least at the edges and
-	// on the ink band.
-	float centre = 1.0 - smoothstep(0.1, 0.7, length((uv - vec2(0.28, 0.82)) * vec2(1.4, 1.6)));
-	float alpha = 1.0 - see_through * mix(0.55, 1.0, centre) * mix(0.75, 1.0, band);
-	alpha = max(alpha, 1.0 - smoothstep(0.035, 0.04, w));
-	COLOR = vec4(col, alpha);
+	COLOR = vec4(col, 1.0);
 }

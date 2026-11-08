@@ -4,20 +4,12 @@ extends RefCounted
 ## partner's hand and the thrown gun. Points down -Z; about 0.4 m long.
 
 const Palette := preload("res://scripts/palette.gd")
-const Models := preload("res://scripts/models.gd")
-const GRIP := Color("7a4a2c")
 
 static var _meshes := {}
 
 
 ## Returns the revolver and its cylinder (whose material shows loaded/empty).
 static func build() -> Array:
-	# The Blender model (tools/blender/weapons.py) when it's been built.
-	var model := Models.build("revolver", {
-		"steel": Palette.toon(Palette.STEEL), "dark": Palette.toon(Palette.INK),
-		"grip": Palette.toon(GRIP), "drum": Palette.toon(Palette.MUTED)}, false)
-	if model != null:
-		return [model, model.find_child("drum", true, false)]
 	var root := Node3D.new()
 	var steel := Palette.toon(Palette.STEEL)
 	var dark := Palette.toon(Palette.INK)

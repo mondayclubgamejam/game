@@ -2,10 +2,6 @@ extends RefCounted
 ## Colours from game-style/STYLE_BRIEF.md and a cache of shared materials, so
 ## every enemy, wall and effect reuses the same few material objects.
 
-## Comic look: toon light bands plus the ink / halftone post pass
-## (shaders/comic.gdshader). Off gives plain smooth shading.
-const COMIC := false
-
 const FORWARD := Color("ff7a1a")   ## player A, the shot
 const REVERSE := Color("2fa8ff")   ## player B, the recall
 const ENEMY := Color("ff2e88")
@@ -13,22 +9,20 @@ const SIGNAL := Color("ffcc1a")    ## the gun when loose, titles
 const TARGET := Color("ffe14d")
 const DANGER := Color("ff3344")
 const INK := Color("1a1026")
-const WALL := Color("ebe7ef")      ## pale, faintly violet: lets the role and enemy colours pop
-const CEILING := Color("f4f2f6")
-const FLOOR_A := Color("f1eee9")
-const FLOOR_B := Color("e6e1da")
+const WALL := Color("5a3c8c")
+const FLOOR_A := Color("f3e9d2")
+const FLOOR_B := Color("e3d3b0")
 const SKY_TOP := Color("2a1446")
 const SKY_HORIZON := Color("ff6fa8")
 const STEEL := Color("3a3052")
 const BLADE := Color("d8dcec")
 const MUTED := Color("6d5f8f")
-const CRATE := Color("dcd5ca")
+const CRATE := Color("d0874a")
 ## Enemy weapon colours (belt, weapon accents, HUD tags), by RoomGen.Kind:
-## gun = red (ranged danger), sword = blue steel (reads on pale walls), knives = lime.
-const KIND_COLORS := [Color("ff3344"), Color("6f7da6"), Color("9bff3a")]
-const KIND_NAMES := ["GUN", "SWORD", "KNIVES"]
-const KNIFE_BLADE := Color("8b93ad")
-const CRATE_EDGE := Color("c4bbad")
+## gun = red (ranged danger), sword = bright steel, fists = lime.
+const KIND_COLORS := [Color("ff3344"), Color("e8ecf8"), Color("9bff3a")]
+const KIND_NAMES := ["GUN", "SWORD", "FISTS"]
+const CRATE_EDGE := Color("8a4f2a")
 
 static var _toon_cache := {}
 static var _glow_cache := {}
@@ -41,12 +35,9 @@ static func toon(color: Color) -> StandardMaterial3D:
 		return _toon_cache[key]
 	var m := StandardMaterial3D.new()
 	m.albedo_color = color
-	if COMIC:
-		m.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
-		m.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
-		m.roughness = 1.0
-	else:
-		m.roughness = 0.8
+	m.diffuse_mode = BaseMaterial3D.DIFFUSE_TOON
+	m.specular_mode = BaseMaterial3D.SPECULAR_DISABLED
+	m.roughness = 1.0
 	_toon_cache[key] = m
 	return m
 

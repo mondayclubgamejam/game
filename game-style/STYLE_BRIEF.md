@@ -28,24 +28,14 @@ current build with `godot --path . -- --shots=game-style/screenshots`.
 | Targeted enemy glow | Pale yellow | `#ffe14d` |
 | Blocked / danger | Red | `#ff3344` |
 | Ink (outlines, panel borders) | Purple-black | `#1a1026` |
-| Walls / ceiling | Pale violet-white | `#ebe7ef` / `#f4f2f6` |
-| Floor checker | Warm off-white | `#f1eee9` / `#e6e1da` |
+| Walls | Deep violet | `#5a3c8c` |
+| Floor checker | Cream / sand | `#f3e9d2` / `#e3d3b0` |
 | Sky | Violet to pink gradient | `#2a1446` / `#ff6fa8` |
 
 Rule of thumb: **orange and blue mean time direction**, and nothing else uses
 them. Magenta means "shoot this". Yellow means "go here".
 
-## Environment
-
-Enclosed, pale rooms: a ceiling with glowing light panels, and a window wall
-along the back (+Z) whose openings let a low sun lay bright shafts across the
-floor. The sky shows through the windows. Walls, floor and crates stay near
-white so the role colours, magenta enemies and yellow gun are the only colour.
-
-## Rendering (see `shaders/comic.gdshader`)
-
-**The comic look is currently off** (`COMIC` in `scripts/palette.gd`): plain
-smooth shading with soft shadows and ambient occlusion. With it on:
+## Rendering (see `shaders/comic_post.gdshader`)
 
 - **Toon lighting:** `DIFFUSE_TOON`, no specular, so every surface has two or three flat bands.
 - **Ink outlines:** a full-screen pass finds depth and normal edges and draws
@@ -72,16 +62,8 @@ obvious at once.
 - **Timing:** snappy attacks (under 0.06 s) with soft, overshooting recovery
   (`TRANS_BACK`). Nothing floats.
 - **Walk bob:** a figure-eight sway that grows with speed.
-- **Enemies:** faceless, faceted low-poly mannequins in magenta with a light rim, a belt, weapon and glowing visor in the kind colour. Model: `tools/blender/enemy.py`. Animation is procedural (`scripts/enemy_rig.gd`): every pose has anticipation and follow-through.
-  - Gunman: low ready, two-handed aim, recoil and muzzle flash, reload.
-  - Swordsman: guard with the blade angled forward, lifts it high behind the head, then a diagonal slash with a lunge and a white trail.
-  - Knife fighter: a fighting crouch, both knives drawn back, then a double stab lunge.
-- **Weapons:** near-black metal with one accent in the kind colour: a pistol with a red muzzle band, a curved sword with a blue-steel blade, a lime-guarded knife in each hand for the knife fighters. The players' revolver has a cylinder that glows orange when loaded. Models: `tools/blender/weapons.py`.
-- **Enemy death:** flashes white, topples away from the shot and shrinks away,
-  while 12 tumbling cubes burst out. Later, the recall could reassemble them in reverse.
-- **Menus:** live 3D scene behind a see-through comic overlay; the title drops in
-  and floats; buttons ease up on hover and squash on click; pages fade; map
-  tiles deal in; pause blurs the game.
+- **Enemy death:** bursts into 12 tumbling cubes that shrink away after 2 to 3 s.
+  Later, the recall could reassemble them in reverse.
 - **Doors:** wind up, then rise fast (`TRANS_BACK`, ease in).
 
 ## UI and cut-ins (see `scripts/hud.gd`)

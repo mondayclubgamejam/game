@@ -36,7 +36,6 @@ const DualServerPeer := preload("res://scripts/dual_server_peer.gd")
 const Clock := preload("res://scripts/clock.gd")
 const PauseMenu := preload("res://scripts/pause_menu.gd")
 const Maps := preload("res://scripts/maps.gd")
-const MenuStage := preload("res://scripts/menu_stage.gd")
 
 enum Phase { LOBBY, PLAYING, OVER }
 
@@ -133,7 +132,6 @@ var _round_mode := Lobby.DEFAULT_MAP  ## the map / mode of the round being playe
 var _tut_step := 0             ## tutorial B: the current step (0-5)
 var _tut_mark := 0             ## tutorial B: recalls done when the step began
 var _recalls_done := 0         ## bullets recalled into the gun this round
-var _round_started := 0        ## Time.get_ticks_msec() when this round began
 var _living: Array = []        ## living_players() cache
 var _living_tick := -1
 var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
@@ -156,10 +154,6 @@ var _online_ws_url := ""
 
 func _ready() -> void:
 	if _relaunch_if_software_rendering():
-		return
-	if OS.get_cmdline_user_args().has("--view"):
-		# Look-only mode: the world and UI with no game running (scripts/viewer.gd).
-		get_tree().change_scene_to_file.call_deferred("res://scenes/viewer.tscn")
 		return
 	process_physics_priority = 100  # run after the players have moved
 	_setup_input()
@@ -211,11 +205,6 @@ func _ready() -> void:
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
 	_parse_args()
-	# The live scene behind the menus (not on a server or a headless test run).
-	if not _dedicated and DisplayServer.get_name() != "headless":
-		var stage := MenuStage.new()
-		stage.game = self
-		add_child(stage)
 
 
 ## Vulkan on the CPU (no proper GPU driver, common on managed or remote
@@ -918,9 +907,7 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 	_tut_step = clampi(number - 1, 0, TUT_STEPS.size() - 1) if mode == "tutorial_b" else 0
 	_tut_mark = 0
 	_recalls_done = 0
-	_round_started = Time.get_ticks_msec()
 	_living_tick = -1
-	hud.clear_result()
 	roster = team
 	if Maps.is_fixed(mode):
 		room = Maps.build(mode, team.size())
@@ -1075,7 +1062,6 @@ func room_cleared() -> void:
 		hud.banner("TRAINING COMPLETE", Palette.ENEMY, TUT_BANNER_HOLD)
 	else:
 		hud.banner("CLEAR!", Palette.ENEMY)
-		_show_room_result()
 	_log_event("room cleared")
 	if Maps.is_fixed(_round_mode):
 		# A hand-made map is done once it's cleared: back to the match lobby.
@@ -1103,8 +1089,6 @@ func player_down(peer: int, cause: String) -> void:
 	_living_tick = -1
 	var me := peer == multiplayer.get_unique_id()
 	hud.banner("YOU DIED" if me else "%s DOWN" % p.player_name, Palette.DANGER)
-	if me:
-		hud.went_down()
 	_log_event("player %d down (%s)" % [peer, cause])
 	if gun != null and gun.state == Gun.HELD and gun.holder == p:
 		gun.drop_at(p.global_position)
@@ -1162,19 +1146,6 @@ func _finish_game(note: String) -> void:
 		_host_show_waiting(note)
 	else:
 		_party_broadcast(note)
-
-
-## The card shown between rooms: time, enemies, tries (and Endless best).
-func _show_room_result() -> void:
-	var secs := (Time.get_ticks_msec() - _round_started) / 1000
-	var stats := [["TIME", "%d:%02d" % [secs / 60, secs % 60]], ["ENEMIES DOWN", enemies.size()],
-		["TRIES", attempt], ["LOOPS", _recalls_done]]
-	var title := "ROOM %d CLEARED" % room_no
-	if Maps.is_fixed(_round_mode):
-		title = "%s CLEARED" % Maps.display_name(_round_mode)
-	elif _round_mode == "endless":
-		stats[2] = ["BEST ROOM", maxi(hud.best, room_no + 1)]
-	hud.show_result(title, stats)
 
 
 ## Host -> everyone: a player left mid-game and the rest carry on.
@@ -1439,7 +1410,6 @@ func _on_bullet_enemy_hit(enemy: Node3D, dir: Vector3) -> void:
 	if not bullet.authority or not enemy.alive:
 		return
 	_action_kills += 1
-	hud.hit()
 	if multiplayer.is_server():
 		_kill_enemy(enemy.id, dir)
 	else:
@@ -1575,7 +1545,7 @@ func enemy_killed(id: int, dir: Vector3) -> void:
 	if id < 0 or id >= enemies.size() or not enemies[id].alive:
 		return
 	var e: Node3D = enemies[id]
-	e.die(dir)
+	e.die()
 	debris.burst(e.global_position, dir)
 	fx.punch()
 	_enemies_left -= 1
@@ -1753,7 +1723,6 @@ func _process(_delta: float) -> void:
 	if phase == Phase.LOBBY or local_player == null:
 		return
 	_update_tutorial_hud()
-	_update_hud_state()
 	hud.targets = _enemies_left
 	hud.can_act = can_fire() or can_recall()
 	hud.ping_ms = int(rtt * 1000.0) if rtt > 0.0 else -1
@@ -1761,100 +1730,6 @@ func _process(_delta: float) -> void:
 		_spectate_next()  # the teammate we watched went down too
 	_update_markers()
 	hud.slowmo = inverse_lerp(1.0, Clock.SLOW, Clock.scale)
-
-
-# --- HUD ------------------------------------------------------------------------------------
-
-## Everything the HUD shows that comes from the game state.
-func _update_hud_state() -> void:
-	var kinds := [0, 0, 0]
-	for e in enemies:
-		if e.alive:
-			kinds[e.kind] += 1
-	hud.kinds_left = kinds
-	var team := []
-	for p in teammates():
-		team.append([p.player_name, p.role, p.alive, gun != null and gun.state == Gun.HELD and gun.holder == p])
-	hud.team = team
-	hud.move = clampf(local_player.move_amount, 0.0, 1.5) if local_player.alive else 0.0
-	_update_gun_card()
-	_update_prompt()
-	_update_threats()
-
-
-func _update_gun_card() -> void:
-	if gun == null or bullet == null:
-		hud.gun_line = ""
-		return
-	hud.gun_loaded = gun.loaded
-	match gun.state:
-		Gun.HELD:
-			if gun.holder == local_player:
-				hud.gun_line = "YOU HAVE THE GUN"
-				hud.gun_line_col = Palette.role_color(local_player.role)
-			else:
-				hud.gun_line = "%s HAS THE GUN" % gun.holder.player_name
-				hud.gun_line_col = Palette.role_color(gun.holder.role)
-		Gun.FLYING:
-			hud.gun_line = "GUN IN THE AIR"
-			hud.gun_line_col = Palette.SIGNAL
-		_:
-			hud.gun_line = "GUN ON THE FLOOR"
-			hud.gun_line_col = Palette.SIGNAL
-	match bullet.state:
-		Bullet.IN_GUN:
-			hud.bullet_line = "LOADED: NORMAL FIRES IT"
-			hud.bullet_line_col = Palette.FORWARD
-		Bullet.FORWARD:
-			hud.bullet_line = "BULLET FIRED"
-			hud.bullet_line_col = Palette.FORWARD
-		Bullet.LODGED:
-			var d := local_player.global_position.distance_to(bullet.lodge_pos)
-			hud.bullet_line = "BULLET IN THE WALL  ·  %d M" % roundi(d)
-			hud.bullet_line_col = Palette.REVERSE
-		Bullet.RECALL:
-			hud.bullet_line = "BULLET COMING BACK"
-			hud.bullet_line_col = Palette.REVERSE
-		_:
-			hud.bullet_line = ""
-
-
-## The key to press right now, under the crosshair.
-func _update_prompt() -> void:
-	hud.prompt_key = ""
-	hud.prompt_text = ""
-	if phase != Phase.PLAYING or not local_player.alive or gun == null:
-		return
-	if can_fire():
-		hud.prompt_key = "LMB"
-		hud.prompt_text = "FIRE"
-	elif can_recall():
-		hud.prompt_key = "LMB"
-		hud.prompt_text = "RECALL"
-	elif i_hold_gun() and bullet.state != Bullet.FORWARD and bullet.state != Bullet.RECALL and not teammates().is_empty():
-		hud.prompt_key = "RMB"
-		hud.prompt_text = "THROW TO A TEAMMATE"
-
-
-## Enemies winding up an attack on us: which way they are, and how close the
-## attack is to landing.
-func _update_threats() -> void:
-	hud.threats.clear()
-	if not local_player.alive:
-		return
-	var cam := local_player.camera
-	for e in enemies:
-		if not e.alive or e._flash <= 0.0:
-			continue
-		var on_me: bool = e._aim_target == local_player
-		if e.kind != RoomGen.Kind.GUNMAN:
-			on_me = e.global_position.distance_to(local_player.global_position) < 4.0
-		if not on_me:
-			continue
-		var rel: Vector3 = cam.global_transform.basis.inverse() * (e.global_position - cam.global_position)
-		var ang: float = atan2(rel.x, -rel.z)
-		var total: float = Enemy.WINDUPS[e.kind] / e.pace
-		hud.threats.append([ang, clampf(1.0 - e._flash / maxf(total, 0.01), 0.0, 1.0)])
 
 
 # --- Tutorials ----------------------------------------------------------------------------

@@ -70,55 +70,28 @@ func _ensure_rig() -> void:
 	_muzzle = Node3D.new()
 	_muzzle.position = Vector3(0, 0.035, -0.34)
 	gun.add_child(_muzzle)
-	# Gloved fist round the grip, in this player's time colour: the back of
-	# the hand, four fingers curled round the front of the grip, a thumb along
-	# the side, a dark cuff and the sleeve.
-	var glove_mat := Palette.toon(Palette.role_color(role))
-	var dark := Palette.toon(Palette.INK.lightened(0.15))
-	var hand := Node3D.new()
-	hand.position = Vector3(0, -0.075, 0.075)
-	hand.rotation.x = -0.35
-	_rig.add_child(hand)
-	var glove_parts: Array[MeshInstance3D] = []
-	glove_parts.append(_capsule(hand, 0.034, 0.12, Vector3(0.004, 0.0, 0.03), Vector3.ZERO, Vector3(1.3, 1, 1), glove_mat))
-	for i in 4:
-		var y := 0.03 - i * 0.021
-		glove_parts.append(_capsule(hand, 0.0125, 0.062 - i * 0.004, Vector3(0.0, y, -0.026), Vector3(0, 0, PI * 0.5),
-			Vector3.ONE, glove_mat))
-	glove_parts.append(_capsule(hand, 0.013, 0.07, Vector3(-0.03, 0.035, -0.005), Vector3(PI * 0.5 - 0.3, 0.25, 0),
-		Vector3.ONE, glove_mat))
-	glove_parts.append(_capsule(hand, 0.045, 0.04, Vector3(0.004, -0.07, 0.045), Vector3.ZERO, Vector3(1.2, 1, 1), dark))
+	# Gloved hand round the grip, in this player's time colour, and a sleeve.
+	var glove := MeshInstance3D.new()
+	var fist := BoxMesh.new()
+	fist.size = Vector3(0.075, 0.1, 0.1)
+	glove.mesh = fist
+	glove.position = Vector3(0, -0.1, 0.08)
+	glove.rotation.x = -0.35
+	glove.material_override = Palette.toon(Palette.role_color(role))
+	_rig.add_child(glove)
 	var sleeve := MeshInstance3D.new()
 	var arm := CylinderMesh.new()
-	arm.top_radius = 0.046
-	arm.bottom_radius = 0.056
+	arm.top_radius = 0.045
+	arm.bottom_radius = 0.055
 	arm.height = 0.3
 	sleeve.mesh = arm
-	sleeve.position = Vector3(0.02, -0.17, 0.24)
+	sleeve.position = Vector3(0.02, -0.16, 0.24)
 	sleeve.rotation.x = PI / 2.0 - 0.45
-	sleeve.material_override = dark
+	sleeve.material_override = Palette.toon(Palette.INK.lightened(0.15))
 	_rig.add_child(sleeve)
-	glove_parts.append(sleeve)
-	for mi in glove_parts:
+	for mi in [glove, sleeve]:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_shown_loaded = not loaded  # force the drum colour to update
-
-
-func _capsule(parent: Node3D, radius: float, height: float, pos: Vector3, rot: Vector3, scl: Vector3,
-		mat: Material) -> MeshInstance3D:
-	var c := CapsuleMesh.new()
-	c.radius = radius
-	c.height = maxf(height, radius * 2.0)
-	c.radial_segments = 12
-	c.rings = 3
-	var mi := MeshInstance3D.new()
-	mi.mesh = c
-	mi.position = pos
-	mi.rotation = rot
-	mi.scale = scl
-	mi.material_override = mat
-	parent.add_child(mi)
-	return mi
 
 
 func _pose_rig() -> void:
