@@ -17,6 +17,8 @@ const MELEE_RANGE := 1.6
 const GUN_RANGE := 18.0
 const SPAWN_GRACE := 2.2       ## no attacks right after a (re)start
 const REACTION := 0.45         ## pause after first spotting someone
+const BODY_RADIUS := 0.4       ## matches the collision capsule
+const CRATE_SIZE := 1.7        ## matches room_builder.gd
 
 const SPEEDS := [2.4, 4.0, 3.45]         ## by kind: gunman, sword, knives (m/s)
 const WINDUPS := [0.7, 0.3, 0.4]
@@ -43,6 +45,8 @@ var _repath := 0.0
 var _path: Array[Vector3] = []
 var _windup := 0.0
 var _cooldown := 0.0
+var _push := Vector3.ZERO      ## cached separation from nearby enemies
+var _sep_tick := 0
 var _query := PhysicsRayQueryParameters3D.new()
 
 # Client smoothing.
@@ -62,8 +66,12 @@ var _flash := 0.0
 func _ready() -> void:
 	collision_layer = LAYER_ENEMY
 	collision_mask = MASK_WORLD
+	# Enemies never leave the floor: skip floor detection and keep slides few.
+	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
+	max_slides = 2
 	_query.collision_mask = MASK_WORLD
 	_think = id * 0.037  # spread brain work across frames
+	_sep_tick = id % 3
 	var capsule := CapsuleShape3D.new()
 	capsule.radius = 0.4
 	capsule.height = 2.2
@@ -326,12 +334,51 @@ func _brain(real_delta: float) -> void:
 			_face(_target.global_position)  # good spot: hold and keep aiming
 		else:
 			wish = _steer(delta, dist)
-	wish += _separation()
+	# Keeping apart compares every enemy with every other: refresh it every
+	# third tick (staggered by id) and reuse it in between.
+	_sep_tick = (_sep_tick + 1) % 3
+	if _sep_tick == 0:
+		_push = _separation()
+	wish += _push
 	wish *= Clock.scale
-	velocity.x = wish.x
-	velocity.z = wish.z
-	velocity.y = 0.0
-	move_and_slide()
+	if wish.length_squared() < 0.0001:
+		velocity = Vector3.ZERO
+		return  # standing still: no need to run the physics move
+	velocity = Vector3(wish.x, 0.0, wish.z)
+	_move(velocity * real_delta)
+
+
+## Moves by `step` and slides along walls and crates. The room is a grid of
+## fixed boxes, so this pushes the body's circle out of any solid cell around
+## it instead of running a physics move (enemies only ever collide with the
+## room; they keep apart from each other with _separation()).
+func _move(step: Vector3) -> void:
+	var room = game.room
+	var p := global_position + step
+	var crate_inset := (RoomGen.TILE - CRATE_SIZE) * 0.5
+	for i in 2:  # twice, for corners
+		var c := RoomGen.world_to_cell(p)
+		for dy in range(-1, 2):
+			for dx in range(-1, 2):
+				var cell := c + Vector2i(dx, dy)
+				if not room.is_solid(cell):
+					continue
+				var inset := 0.0
+				if cell.x >= 0 and cell.y >= 0 and cell.x < room.cols and cell.y < room.rows and not room.is_wall(cell):
+					inset = crate_inset
+				var lo := Vector2(cell) * RoomGen.TILE + Vector2.ONE * inset
+				var hi := Vector2(cell + Vector2i.ONE) * RoomGen.TILE - Vector2.ONE * inset
+				var closest := Vector2(clampf(p.x, lo.x, hi.x), clampf(p.z, lo.y, hi.y))
+				var d := Vector2(p.x, p.z) - closest
+				var l := d.length()
+				if l < BODY_RADIUS:
+					if l > 0.00001:
+						d = d / l * (BODY_RADIUS - l)
+					else:
+						d = Vector2(step.x, step.z).normalized() * -BODY_RADIUS  # inside: back out
+					p.x += d.x
+					p.z += d.y
+	global_position = p
 
 
 func _perceive() -> void:
@@ -393,14 +440,16 @@ func _rebuild_path() -> void:
 
 func _separation() -> Vector3:
 	var push := Vector3.ZERO
+	var here := global_position
 	for e in game.enemies:
 		if e == self or not e.alive:
 			continue
-		var d: Vector3 = global_position - e.global_position
-		d.y = 0.0
-		var l := d.length()
-		if l < 1.0 and l > 0.001:
-			push += d / l * (1.0 - l) * 4.0
+		var dx: float = here.x - e.global_position.x
+		var dz: float = here.z - e.global_position.z
+		var l2 := dx * dx + dz * dz
+		if l2 < 1.0 and l2 > 0.000001:
+			var l := sqrt(l2)
+			push += Vector3(dx, 0, dz) / l * (1.0 - l) * 4.0
 	return push
 
 

@@ -104,6 +104,8 @@ func _build_body() -> void:
 	var color := Palette.role_color(role)
 	_body = Node3D.new()
 	add_child(_body)
+	if DisplayServer.get_name() == "headless":
+		return  # a server draws nothing
 	var man := Mannequin.new()
 	if man.setup(Palette.toon(color), Palette.toon(color.darkened(0.45))):
 		_man = man

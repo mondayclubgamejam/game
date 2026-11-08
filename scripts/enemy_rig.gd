@@ -49,7 +49,18 @@ var _base_mat: Material
 var _state := IDLE
 var _state_t := 0.0
 var _state_len := 0.0
-var _shown := {}          ## bone -> euler currently shown
+## The bones the animation drives, and their indices into the arrays below.
+const BONES := ["thigh_l", "thigh_r", "shin_l", "shin_r", "foot_l", "foot_r", "spine", "chest", "neck",
+	"head", "upperarm_l", "forearm_l", "hand_l", "upperarm_r", "forearm_r", "hand_r"]
+enum { THIGH_L, THIGH_R, SHIN_L, SHIN_R, FOOT_L, FOOT_R, SPINE, CHEST, NECK, HEAD,
+	UPPERARM_L, FOREARM_L, HAND_L, UPPERARM_R, FOREARM_R, HAND_R }
+
+var _shown := PackedVector3Array()    ## euler per bone currently shown
+var _target := PackedVector3Array()   ## euler per bone to move toward (reused every frame)
+var _applied := PackedVector3Array()  ## euler last written to the skeleton
+var _bone_ids := PackedInt32Array()
+var _rest_a: Array[Quaternion] = []   ## per bone: rest * global_rest^-1
+var _rest_b: Array[Quaternion] = []   ## per bone: global_rest
 var _lunge := 0.0         ## shown forward offset of the whole body
 var _drop := 0.0          ## shown crouch (hips down)
 var _walk_phase := 0.0
@@ -77,6 +88,8 @@ func setup(kind_in: int, skin: Color, accent: Color, seed_in: float) -> void:
 	kind = kind_in
 	_seed = seed_in
 	_t = seed_in * 10.0
+	if DisplayServer.get_name() == "headless":
+		return  # a server draws nothing: no body, no animation
 	var body_mat := _body_material(skin)
 	_base_mat = body_mat
 	var m := Mannequin.new()
@@ -85,13 +98,19 @@ func setup(kind_in: int, skin: Color, accent: Color, seed_in: float) -> void:
 		return
 	man = m
 	add_child(man)
+	_cache_bones()
 	tint_parts.append(man.body)
+	# Only the body casts a shadow: belts and weapons are too small to matter
+	# and each would add a draw to the shadow pass.
+	for mi in man.find_children("*", "MeshInstance3D", true, false):
+		if mi != man.body:
+			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_add_visor(accent)
 	var mats := {"dark": Palette.toon(Palette.INK), "steel": Palette.toon(Palette.STEEL),
 		"accent": Palette.toon(accent), "blade": Palette.toon(Palette.KNIFE_BLADE)}
 	match kind:
 		GUNMAN:
-			var pistol := Models.build("pistol", mats)
+			var pistol := Models.build("pistol", mats, false)
 			if pistol != null:
 				_hold(pistol, "hand_r", 0.0, PISTOL_SCALE)
 				_muzzle = Node3D.new()
@@ -99,7 +118,7 @@ func setup(kind_in: int, skin: Color, accent: Color, seed_in: float) -> void:
 				pistol.add_child(_muzzle)
 				_build_flash()
 		SWORD:
-			var sword := Models.build("sword", mats)
+			var sword := Models.build("sword", mats, false)
 			if sword != null:
 				_hold(sword, "hand_r", PI * 0.5, 1.0)
 				_blade_base = Node3D.new()
@@ -111,7 +130,7 @@ func setup(kind_in: int, skin: Color, accent: Color, seed_in: float) -> void:
 				_build_trail()
 		KNIVES:
 			for side in ["hand_r", "hand_l"]:
-				var knife := Models.build("knife", mats)
+				var knife := Models.build("knife", mats, false)
 				if knife != null:
 					_hold(knife, side, PI * 0.5, KNIFE_SCALE)
 	animate(0.0, 0.0, null)
@@ -213,6 +232,8 @@ func _set_state(s: int, length: float) -> void:
 ## `speed`: how fast the body moves (m/s). `aim_at`: a point a gunman points
 ## at (null: nobody in range, keep the gun low).
 func animate(real_delta: float, speed: float, aim_at: Variant) -> void:
+	if man == null and _fallback_arm == null:
+		return  # headless: nothing to animate
 	var delta := real_delta * Clock.scale
 	_t += delta
 	_advance(delta)
@@ -235,13 +256,12 @@ func animate(real_delta: float, speed: float, aim_at: Variant) -> void:
 		return
 	if _state == IDLE and cam != null and cam.global_position.distance_squared_to(global_position) > FAR_SQ:
 		delta *= 2.0
-	var target := _target_pose()
+	_target_pose()
 	var k := 1.0 - exp(-RATE[_state] * delta) if real_delta > 0.0 else 1.0
-	for bone in target:
-		var cur: Vector3 = _shown.get(bone, Vector3.ZERO)
-		cur = cur.lerp(target[bone], k)
-		_shown[bone] = cur
-		man.pose(bone, cur)
+	for b in BONES.size():
+		var cur := _shown[b].lerp(_target[b], k)
+		_shown[b] = cur
+		_apply(b, cur)
 	var lunge_goal := 0.0
 	if _state == STRIKE or (_state == RECOVER and _state_t < _state_len * 0.4):
 		lunge_goal = LUNGE[kind]
@@ -276,39 +296,63 @@ func _advance(delta: float) -> void:
 
 
 func _snap() -> void:
-	var target := _target_pose()
-	for bone in target:
-		_shown[bone] = target[bone]
-		man.pose(bone, target[bone])
+	_target_pose()
+	for b in BONES.size():
+		_shown[b] = _target[b]
+		_apply(b, _target[b])
 
 
-## The pose to move toward this frame.
-func _target_pose() -> Dictionary:
-	var p := {}
+## Sets bone `b` (an index into BONES) to `euler`, skipping it when the
+## change is too small to see (most bones on a calm enemy).
+func _apply(b: int, euler: Vector3) -> void:
+	if _applied[b].distance_squared_to(euler) < 0.000004:
+		return
+	_applied[b] = euler
+	man.skeleton.set_bone_pose_rotation(_bone_ids[b], _rest_a[b] * Quaternion.from_euler(euler) * _rest_b[b])
+
+
+## Looks up each animated bone's index and rest rotations once.
+func _cache_bones() -> void:
+	_bone_ids.resize(BONES.size())
+	_shown.resize(BONES.size())
+	_target.resize(BONES.size())
+	_applied.resize(BONES.size())
+	for b in BONES.size():
+		var id := man.skeleton.find_bone(BONES[b])
+		_bone_ids[b] = id
+		var g := man.skeleton.get_bone_global_rest(id).basis.get_rotation_quaternion()
+		_rest_a.append(man.skeleton.get_bone_rest(id).basis.get_rotation_quaternion() * g.inverse())
+		_rest_b.append(g)
+		_applied[b] = Vector3(INF, 0, 0)
+
+
+## The pose to move toward this frame, into _target.
+func _target_pose() -> void:
+	var p := _target
 	var w := _walk_amt
 	var s := sin(_walk_phase)
 	var breath := sin(_t * 1.7 + _seed * 7.0) * 0.03
 	# Legs: stride, knees bend on the back swing.
 	var stride := s * 0.55 * w
-	p["thigh_l"] = Vector3(stride, 0, 0)
-	p["thigh_r"] = Vector3(-stride, 0, 0)
-	p["shin_l"] = Vector3(-maxf(-stride, 0.0) * 1.6, 0, 0)
-	p["shin_r"] = Vector3(-maxf(stride, 0.0) * 1.6, 0, 0)
-	p["foot_l"] = Vector3.ZERO
-	p["foot_r"] = Vector3.ZERO
-	p["spine"] = Vector3(0.06 * w, 0, 0)
-	p["chest"] = Vector3(breath + 0.08 * w, s * 0.08 * w, 0)
-	p["neck"] = Vector3.ZERO
+	p[THIGH_L] = Vector3(stride, 0, 0)
+	p[THIGH_R] = Vector3(-stride, 0, 0)
+	p[SHIN_L] = Vector3(-maxf(-stride, 0.0) * 1.6, 0, 0)
+	p[SHIN_R] = Vector3(-maxf(stride, 0.0) * 1.6, 0, 0)
+	p[FOOT_L] = Vector3.ZERO
+	p[FOOT_R] = Vector3.ZERO
+	p[SPINE] = Vector3(0.06 * w, 0, 0)
+	p[CHEST] = Vector3(breath + 0.08 * w, s * 0.08 * w, 0)
+	p[NECK] = Vector3.ZERO
 	# Glance around while idle.
-	p["head"] = Vector3(-0.05, sin(_t * 0.37 + _seed * 3.0) * 0.25 * (1.0 - w), 0)
+	p[HEAD] = Vector3(-0.05, sin(_t * 0.37 + _seed * 3.0) * 0.25 * (1.0 - w), 0)
 	# Free arms swing against the legs.
 	var swing := -stride * 0.8
-	p["upperarm_l"] = Vector3(swing, 0, -0.08)
-	p["forearm_l"] = Vector3(0.25 + 0.2 * w, 0, 0)
-	p["hand_l"] = Vector3.ZERO
-	p["upperarm_r"] = Vector3(-swing, 0, 0.08)
-	p["forearm_r"] = Vector3(0.25 + 0.2 * w, 0, 0)
-	p["hand_r"] = Vector3.ZERO
+	p[UPPERARM_L] = Vector3(swing, 0, -0.08)
+	p[FOREARM_L] = Vector3(0.25 + 0.2 * w, 0, 0)
+	p[HAND_L] = Vector3.ZERO
+	p[UPPERARM_R] = Vector3(-swing, 0, 0.08)
+	p[FOREARM_R] = Vector3(0.25 + 0.2 * w, 0, 0)
+	p[HAND_R] = Vector3.ZERO
 	match kind:
 		GUNMAN:
 			_pose_gunman(p)
@@ -316,146 +360,140 @@ func _target_pose() -> Dictionary:
 			_pose_sword(p)
 		KNIVES:
 			_pose_knives(p)
-	return p
 
 
 func _phase() -> float:
 	return clampf(_state_t / _state_len, 0.0, 1.0)
 
 
-func _pose_gunman(p: Dictionary) -> void:
+## Two-handed aim: right arm straight at the target, left hand under it.
+func _aimed(p: PackedVector3Array) -> void:
 	var aim := _aim_pitch
-	# Two-handed aim: right arm straight at the target, left hand under it.
-	var aimed := {
-		"upperarm_r": Vector3(PI * 0.5 + aim, 0.12, 0),
-		"forearm_r": Vector3(0.05, 0, 0),
-		"hand_r": Vector3(-0.05, 0, 0),
-		"upperarm_l": Vector3(PI * 0.5 + aim - 0.12, -0.55, 0),
-		"forearm_l": Vector3(0.15, -0.35, 0),
-		"chest": Vector3(p["chest"].x, -0.22, 0),
-		"head": Vector3(-aim * 0.8, 0.18, 0),
-	}
-	var low := {
-		"upperarm_r": Vector3(0.55, 0.15, 0.05),
-		"forearm_r": Vector3(0.45, 0, 0),
-		"hand_r": Vector3(-0.2, 0, 0),
-	}
+	p[UPPERARM_R] = Vector3(PI * 0.5 + aim, 0.12, 0)
+	p[FOREARM_R] = Vector3(0.05, 0, 0)
+	p[HAND_R] = Vector3(-0.05, 0, 0)
+	p[UPPERARM_L] = Vector3(PI * 0.5 + aim - 0.12, -0.55, 0)
+	p[FOREARM_L] = Vector3(0.15, -0.35, 0)
+	p[CHEST] = Vector3(p[CHEST].x, -0.22, 0)
+	p[HEAD] = Vector3(-aim * 0.8, 0.18, 0)
+
+
+func _pose_gunman(p: PackedVector3Array) -> void:
 	match _state:
-		WINDUP:
-			p.merge(aimed, true)
+		WINDUP, RECOVER:
+			_aimed(p)
 		STRIKE:
-			p.merge(aimed, true)
-			p["upperarm_r"] += Vector3(0.2, 0, 0)        # recoil kicks the gun up
-			p["forearm_r"] += Vector3(0.15, 0, 0)
-			p["hand_r"] += Vector3(0.35, 0, 0)
-			p["upperarm_l"] += Vector3(0.15, 0, 0)
-			p["chest"] += Vector3(-0.12, 0, 0)
-			p["head"] += Vector3(-0.1, 0, 0)
-		RECOVER:
-			p.merge(aimed, true)
+			_aimed(p)
+			p[UPPERARM_R] += Vector3(0.2, 0, 0)        # recoil kicks the gun up
+			p[FOREARM_R] += Vector3(0.15, 0, 0)
+			p[HAND_R] += Vector3(0.35, 0, 0)
+			p[UPPERARM_L] += Vector3(0.15, 0, 0)
+			p[CHEST] += Vector3(-0.12, 0, 0)
+			p[HEAD] += Vector3(-0.1, 0, 0)
 		RELOAD:
 			# Gun pulled in to the chest; the left hand slaps a new magazine in.
 			var slap := sin(_phase() * PI)
-			p["upperarm_r"] = Vector3(0.45, -0.35, 0)
-			p["forearm_r"] = Vector3(1.5, 0, 0)
-			p["hand_r"] = Vector3(-0.3, 0, 0)
-			p["upperarm_l"] = Vector3(0.35 + 0.25 * slap, -0.45, 0)
-			p["forearm_l"] = Vector3(1.0 + 0.4 * slap, -0.2, 0)
-			p["head"] = Vector3(0.35, 0.1, 0)
+			p[UPPERARM_R] = Vector3(0.45, -0.35, 0)
+			p[FOREARM_R] = Vector3(1.5, 0, 0)
+			p[HAND_R] = Vector3(-0.3, 0, 0)
+			p[UPPERARM_L] = Vector3(0.35 + 0.25 * slap, -0.45, 0)
+			p[FOREARM_L] = Vector3(1.0 + 0.4 * slap, -0.2, 0)
+			p[HEAD] = Vector3(0.35, 0.1, 0)
 		_:
 			if _aiming:
-				p.merge(aimed, true)
+				_aimed(p)
 			else:
-				p.merge(low, true)
+				# Low ready.
+				p[UPPERARM_R] = Vector3(0.55, 0.15, 0.05)
+				p[FOREARM_R] = Vector3(0.45, 0, 0)
+				p[HAND_R] = Vector3(-0.2, 0, 0)
 
 
-func _pose_sword(p: Dictionary) -> void:
-	var guard := {
-		"upperarm_r": Vector3(0.5, 0.2, 0.1),
-		"forearm_r": Vector3(0.35, 0.15, 0),
-		"hand_r": Vector3(-0.25, 0, 0),
-		"upperarm_l": Vector3(0.3 + p["upperarm_l"].x * 0.5, 0, -0.15),
-		"chest": Vector3(p["chest"].x, -0.12 + p["chest"].y, 0),
-	}
-	p.merge(guard, true)
+func _pose_sword(p: PackedVector3Array) -> void:
+	# Guard: blade angled up and forward.
+	p[UPPERARM_R] = Vector3(0.5, 0.2, 0.1)
+	p[FOREARM_R] = Vector3(0.35, 0.15, 0)
+	p[HAND_R] = Vector3(-0.25, 0, 0)
+	p[UPPERARM_L] = Vector3(0.3 + p[UPPERARM_L].x * 0.5, 0, -0.15)
+	p[CHEST] = Vector3(p[CHEST].x, -0.12 + p[CHEST].y, 0)
 	match _state:
 		WINDUP:
 			# Sword lifted high behind the head, body coiled to the right.
-			p["upperarm_r"] = Vector3(2.75, 0.2, 0.35)
-			p["forearm_r"] = Vector3(0.9, 0, 0)
-			p["hand_r"] = Vector3(0.35, 0, 0)
-			p["upperarm_l"] = Vector3(0.7, 0, -0.35)
-			p["chest"] = Vector3(-0.15, -0.55, 0)
-			p["spine"] = Vector3(-0.05, -0.15, 0)
-			p["head"] = Vector3(0.05, 0.45, 0)
-			p["thigh_r"] = Vector3(-0.25, 0, 0)
-			p["thigh_l"] = Vector3(0.2, 0, 0)
+			p[UPPERARM_R] = Vector3(2.75, 0.2, 0.35)
+			p[FOREARM_R] = Vector3(0.9, 0, 0)
+			p[HAND_R] = Vector3(0.35, 0, 0)
+			p[UPPERARM_L] = Vector3(0.7, 0, -0.35)
+			p[CHEST] = Vector3(-0.15, -0.55, 0)
+			p[SPINE] = Vector3(-0.05, -0.15, 0)
+			p[HEAD] = Vector3(0.05, 0.45, 0)
+			p[THIGH_R] = Vector3(-0.25, 0, 0)
+			p[THIGH_L] = Vector3(0.2, 0, 0)
 		STRIKE, RECOVER:
 			if _state == RECOVER and _phase() > 0.45:
 				return  # ease back to guard
 			# Diagonal slash: down and across to the left, stepping in.
-			p["upperarm_r"] = Vector3(0.95, 0.85, 0.0)
-			p["forearm_r"] = Vector3(0.1, 0.2, 0)
-			p["hand_r"] = Vector3(-1.5, 0, 0)
-			p["upperarm_l"] = Vector3(-0.4, 0, -0.45)
-			p["chest"] = Vector3(0.3, 0.55, 0)
-			p["spine"] = Vector3(0.1, 0.15, 0)
-			p["head"] = Vector3(0.1, -0.35, 0)
-			p["thigh_r"] = Vector3(0.6, 0, 0)
-			p["shin_r"] = Vector3(-0.3, 0, 0)
-			p["thigh_l"] = Vector3(-0.35, 0, 0)
+			p[UPPERARM_R] = Vector3(0.95, 0.85, 0.0)
+			p[FOREARM_R] = Vector3(0.1, 0.2, 0)
+			p[HAND_R] = Vector3(-1.5, 0, 0)
+			p[UPPERARM_L] = Vector3(-0.4, 0, -0.45)
+			p[CHEST] = Vector3(0.3, 0.55, 0)
+			p[SPINE] = Vector3(0.1, 0.15, 0)
+			p[HEAD] = Vector3(0.1, -0.35, 0)
+			p[THIGH_R] = Vector3(0.6, 0, 0)
+			p[SHIN_R] = Vector3(-0.3, 0, 0)
+			p[THIGH_L] = Vector3(-0.35, 0, 0)
 
 
-func _pose_knives(p: Dictionary) -> void:
+func _pose_knives(p: PackedVector3Array) -> void:
 	# Low fighting crouch, a knife forward in each hand.
-	var crouch := {
-		"thigh_l": Vector3(0.45 + p["thigh_l"].x, 0, -0.08),
-		"thigh_r": Vector3(0.45 + p["thigh_r"].x, 0, 0.08),
-		"shin_l": Vector3(-0.8 + p["shin_l"].x, 0, 0),
-		"shin_r": Vector3(-0.8 + p["shin_r"].x, 0, 0),
-		"foot_l": Vector3(0.35, 0, 0),
-		"foot_r": Vector3(0.35, 0, 0),
-		"spine": Vector3(0.2, 0, 0),
-		"chest": Vector3(0.15 + p["chest"].x, p["chest"].y, 0),
-		"head": Vector3(-0.3, p["head"].y * 0.5, 0),
-		"upperarm_r": Vector3(0.15, 0.1, 0.15),
-		"forearm_r": Vector3(0.95, 0, 0),
-		"hand_r": Vector3(-0.7, 0, 0),
-		"upperarm_l": Vector3(0.35, -0.1, -0.15),
-		"forearm_l": Vector3(0.85, 0, 0),
-		"hand_l": Vector3(-0.75, 0, 0),
-	}
-	p.merge(crouch, true)
+	p[THIGH_L] = Vector3(0.45 + p[THIGH_L].x, 0, -0.08)
+	p[THIGH_R] = Vector3(0.45 + p[THIGH_R].x, 0, 0.08)
+	p[SHIN_L] = Vector3(-0.8 + p[SHIN_L].x, 0, 0)
+	p[SHIN_R] = Vector3(-0.8 + p[SHIN_R].x, 0, 0)
+	p[FOOT_L] = Vector3(0.35, 0, 0)
+	p[FOOT_R] = Vector3(0.35, 0, 0)
+	p[SPINE] = Vector3(0.2, 0, 0)
+	p[CHEST] = Vector3(0.15 + p[CHEST].x, p[CHEST].y, 0)
+	p[HEAD] = Vector3(-0.3, p[HEAD].y * 0.5, 0)
+	p[UPPERARM_R] = Vector3(0.15, 0.1, 0.15)
+	p[FOREARM_R] = Vector3(0.95, 0, 0)
+	p[HAND_R] = Vector3(-0.7, 0, 0)
+	p[UPPERARM_L] = Vector3(0.35, -0.1, -0.15)
+	p[FOREARM_L] = Vector3(0.85, 0, 0)
+	p[HAND_L] = Vector3(-0.75, 0, 0)
 	match _state:
 		WINDUP:
 			# Both knives drawn back, coiled low.
-			p["upperarm_r"] = Vector3(-0.6, 0.0, 0.3)
-			p["forearm_r"] = Vector3(1.35, 0, 0)
-			p["upperarm_l"] = Vector3(-0.6, 0.0, -0.3)
-			p["forearm_l"] = Vector3(1.35, 0, 0)
-			p["chest"] = Vector3(0.05, 0, 0)
-			p["spine"] = Vector3(0.3, 0, 0)
+			p[UPPERARM_R] = Vector3(-0.6, 0.0, 0.3)
+			p[FOREARM_R] = Vector3(1.35, 0, 0)
+			p[UPPERARM_L] = Vector3(-0.6, 0.0, -0.3)
+			p[FOREARM_L] = Vector3(1.35, 0, 0)
+			p[CHEST] = Vector3(0.05, 0, 0)
+			p[SPINE] = Vector3(0.3, 0, 0)
 		STRIKE, RECOVER:
 			if _state == RECOVER and _phase() > 0.4:
 				return
 			# Lunge: both knives thrust forward, the left a beat behind.
 			var lag := 0.0 if _state == RECOVER else 1.0 - _phase()
-			p["upperarm_r"] = Vector3(1.2, 0.12, 0)
-			p["forearm_r"] = Vector3(0.05, 0, 0)
-			p["hand_r"] = Vector3(-1.05, 0, 0)
-			p["upperarm_l"] = Vector3(1.05 - 0.6 * lag, -0.12, 0)
-			p["forearm_l"] = Vector3(0.1 + 0.6 * lag, 0, 0)
-			p["hand_l"] = Vector3(-1.0, 0, 0)
-			p["chest"] = Vector3(0.35, 0.1, 0)
-			p["thigh_r"] = Vector3(0.9, 0, 0.08)
-			p["shin_r"] = Vector3(-0.9, 0, 0)
-			p["thigh_l"] = Vector3(-0.2, 0, -0.08)
-			p["shin_l"] = Vector3(-0.3, 0, 0)
+			p[UPPERARM_R] = Vector3(1.2, 0.12, 0)
+			p[FOREARM_R] = Vector3(0.05, 0, 0)
+			p[HAND_R] = Vector3(-1.05, 0, 0)
+			p[UPPERARM_L] = Vector3(1.05 - 0.6 * lag, -0.12, 0)
+			p[FOREARM_L] = Vector3(0.1 + 0.6 * lag, 0, 0)
+			p[HAND_L] = Vector3(-1.0, 0, 0)
+			p[CHEST] = Vector3(0.35, 0.1, 0)
+			p[THIGH_R] = Vector3(0.9, 0, 0.08)
+			p[SHIN_R] = Vector3(-0.9, 0, 0)
+			p[THIGH_L] = Vector3(-0.2, 0, -0.08)
+			p[SHIN_L] = Vector3(-0.3, 0, 0)
 
 
 ## Death: a white flash, knocked back and toppling away from the shot, then
 ## shrinking out of sight; the enemy is hidden at the end.
 func fall(hit_dir: Vector3) -> void:
+	if man == null and _fallback_arm == null:
+		get_parent().visible = false
+		return
 	var flat := Vector3(hit_dir.x, 0, hit_dir.z)
 	if flat.length() < 0.01:
 		flat = global_basis.z

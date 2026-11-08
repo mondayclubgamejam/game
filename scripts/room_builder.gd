@@ -138,6 +138,12 @@ static func build(room: RefCounted) -> Node3D:
 		rim_shape.position = side[0]
 		rim.add_child(rim_shape)
 	root.add_child(rim)
+	if DisplayServer.get_name() == "headless":
+		# A server (or a headless test run) draws nothing: keep only collision.
+		for child in root.get_children():
+			if child is GeometryInstance3D or child is Light3D:
+				root.remove_child(child)
+				child.free()
 	return root
 
 

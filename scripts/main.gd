@@ -134,6 +134,8 @@ var _tut_step := 0             ## tutorial B: the current step (0-5)
 var _tut_mark := 0             ## tutorial B: recalls done when the step began
 var _recalls_done := 0         ## bullets recalled into the gun this round
 var _round_started := 0        ## Time.get_ticks_msec() when this round began
+var _living: Array = []        ## living_players() cache
+var _living_tick := -1
 var _host_time_target := 1.0   ## the host's slow-motion decision, as last received
 var _party := {}               ## host: match lobby members, peer id -> {name, role, ready}
 var _party_order: Array[int] = []
@@ -917,6 +919,7 @@ func start_round(seed_in: int, number: int, try_no: int, team: Array, mode: Stri
 	_tut_mark = 0
 	_recalls_done = 0
 	_round_started = Time.get_ticks_msec()
+	_living_tick = -1
 	hud.clear_result()
 	roster = team
 	if Maps.is_fixed(mode):
@@ -1097,6 +1100,7 @@ func player_down(peer: int, cause: String) -> void:
 	if p == null or not p.alive:
 		return
 	p.kill()
+	_living_tick = -1
 	var me := peer == multiplayer.get_unique_id()
 	hud.banner("YOU DIED" if me else "%s DOWN" % p.player_name, Palette.DANGER)
 	if me:
@@ -1186,6 +1190,7 @@ func player_left(peer: int) -> void:
 	if gun != null and gun.state == Gun.HELD and gun.holder == p:
 		gun.drop_at(p.global_position)
 	players.erase(peer)
+	_living_tick = -1
 	p.queue_free()
 	_update_carry()
 	if multiplayer.is_server():
@@ -1540,12 +1545,17 @@ func _update_carry() -> void:
 
 # --- Enemies ---------------------------------------------------------------------------
 
+## Players still standing. Built at most once per physics tick (enemies ask
+## constantly); don't modify the returned array.
 func living_players() -> Array:
-	var out := []
-	for p in players.values():
-		if p.alive:
-			out.append(p)
-	return out
+	var tick := Engine.get_physics_frames()
+	if tick != _living_tick:
+		_living_tick = tick
+		_living.clear()
+		for p in players.values():
+			if p.alive:
+				_living.append(p)
+	return _living
 
 
 func _kill_enemy(id: int, dir: Vector3) -> void:

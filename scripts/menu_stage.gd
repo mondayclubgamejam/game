@@ -23,20 +23,35 @@ var _rigs: Array = []
 var _t := 0.0
 var _next_attack := 2.0
 var _placed := false
+var _set: Node3D = null       ## the room and cast while shown
 
 
 func _ready() -> void:
-	add_child(RoomBuilder.build(Maps.build("warmup", 2)))
 	_camera = Camera3D.new()
 	_camera.fov = 62.0
 	add_child(_camera)
 	_camera.position = CAM_POS
 	_camera.look_at(CAM_LOOK)
+
+
+## The room and cast exist only while the stage is shown: freed during play,
+## rebuilt on the way back to the menus.
+func _build() -> void:
+	_set = Node3D.new()
+	add_child(_set)
+	_set.add_child(RoomBuilder.build(Maps.build("warmup", 2)))
 	for c in CAST:
 		var rig := EnemyRig.new()
-		add_child(rig)
+		_set.add_child(rig)
 		rig.setup(c[1], Palette.ENEMY, Palette.KIND_COLORS[c[1]], randf())
 		_rigs.append(rig)
+	_placed = false
+
+
+func _teardown() -> void:
+	_rigs.clear()
+	_set.queue_free()
+	_set = null
 
 
 ## Stands each figure where its feet should appear, facing the camera.
@@ -60,7 +75,11 @@ func _process(delta: float) -> void:
 	var on: bool = game != null and game.round_root == null
 	visible = on
 	if not on:
+		if _set != null:
+			_teardown()
 		return
+	if _set == null:
+		_build()
 	if not _camera.current:
 		_camera.make_current()
 	if not _placed:
